@@ -8,10 +8,10 @@ import shutil
 import stat
 import subprocess
 import tempfile
-from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 
@@ -457,7 +457,7 @@ def redact_source(source: str) -> str:
 
 
 def _local_git_sha(root: Path, files: dict[str, bytes]) -> str | None:
-    """HEAD sha if root is the top of a clean git work tree and every file read is tracked, else None.
+    """HEAD sha if root is a clean git work tree and every file read is tracked, else None.
 
     A file that git ignores (so `status` does not show it) but the loader read would make the sha
     describe different content than was loaded, so it forces the content-hash sha instead.
