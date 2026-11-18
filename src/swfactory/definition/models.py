@@ -30,6 +30,7 @@ from swfactory.domain.types import (
     SelectionMode,
     TriageMode,
 )
+from swfactory.sandbox.base import RunnerSpec
 from swfactory.settings import Settings
 
 SLUG_PATTERN = r"^[a-z0-9][a-z0-9-]{0,39}$"
@@ -147,6 +148,24 @@ class ProviderDef(StrictModel):
     def _check_base_url(cls, v: str | None) -> str | None:
         if v is not None and urlsplit(v).scheme not in ("http", "https"):
             raise ValueError("base_url must be an http or https url")
+        return v
+
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, v: str | None) -> str | None:
+        # A literal project id only. "os.environ/NAME" would make the gateway read any of its own
+        # environment variables (its secrets) and send the value to the provider.
+        if v is not None and not re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", v):
+            raise ValueError(
+                "project must be a GCP project id (lowercase letters, digits, hyphens)"
+            )
+        return v
+
+    @field_validator("location")
+    @classmethod
+    def _check_location(cls, v: str | None) -> str | None:
+        if v is not None and not re.fullmatch(r"[a-z0-9-]+", v):
+            raise ValueError("location must be a region name such as global or us-central1")
         return v
 
 
@@ -710,3 +729,15 @@ def write_schema(path: Path) -> None:
 
 if __name__ == "__main__":
     write_schema(Path("schema/definition.schema.json"))
+
+
+def runner_spec(defn: Definition, name: str) -> RunnerSpec:
+    r = defn.runners[name]
+    return RunnerSpec(
+        name=name,
+        image=r.image,
+        cpus=r.cpus,
+        memory_mb=r.memory_mb,
+        pids=r.pids,
+        allowed_hosts=tuple(r.allowed_hosts),
+    )

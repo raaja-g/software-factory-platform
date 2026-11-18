@@ -1,5 +1,6 @@
 """Render the LiteLLM proxy config from the definition."""
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -32,6 +33,26 @@ def _per_token(per_mtok: Any) -> float:
     return float(per_mtok) / 1_000_000
 
 
+# The only environment variables a rendered config may reference. Anything else that starts with
+# "os.environ/" would let a definition read the gateway's other secrets.
+_ENV_REF = re.compile(
+    r"os\.environ/((GEMINI|GROQ|OPENROUTER|BYO_[A-Z0-9_]+)_API_KEY|GOOGLE_CLOUD_PROJECT"
+    r"|[A-Z][A-Z0-9_]*_PROJECT|LITELLM_MASTER_KEY)"
+)
+
+
+def _check_env_refs(params: dict[str, Any]) -> None:
+    for key, value in params.items():
+        if (
+            isinstance(value, str)
+            and value.startswith("os.environ/")
+            and not _ENV_REF.fullmatch(value)
+        ):
+            raise ValueError(
+                f"refusing to render {key}={value!r}: not an allowed environment reference"
+            )
+
+
 def render_litellm_config(defn: Definition) -> dict[str, Any]:
     providers = defn.factory.providers
     entries: list[dict[str, Any]] = []
@@ -54,6 +75,7 @@ def render_litellm_config(defn: Definition) -> dict[str, Any]:
         if m.tpm is not None:
             params["tpm"] = m.tpm
             limited = True
+        _check_env_refs(params)
         entry: dict[str, Any] = {"model_name": alias, "litellm_params": params}
         info: dict[str, Any] = {}
         if prov.kind in LOCAL_KINDS:
