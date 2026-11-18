@@ -273,3 +273,52 @@ def test_init_refuses_non_empty_dir(tmp_path):
         assert "not empty" in str(e)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_redact_source_drops_url_credentials():
+    from swfactory.definition.loader import redact_source
+
+    assert redact_source("https://user:tok3n@github.com/o/r.git") == "https://github.com/o/r.git"
+    assert redact_source("https://github.com/o/r.git") == "https://github.com/o/r.git"
+    assert redact_source("git@github.com:o/r.git") == "git@github.com:o/r.git"
+    assert redact_source("/tmp/some/dir") == "/tmp/some/dir"
+
+
+def test_failed_fetch_error_never_shows_url_credentials():
+    from swfactory.definition.loader import load_definition
+
+    r = load_definition("https://user:tok3n@127.0.0.1:1/none.git")
+    assert r.errors and "tok3n" not in r.source
+    assert all("tok3n" not in str(e) and "tok3n" not in e.file for e in r.errors)
+
+
+def test_ignored_definition_file_forces_content_sha(tmp_path):
+    import subprocess
+
+    from swfactory.definition.loader import init_definition_repo, load_definition
+
+    root = tmp_path / "def"
+    init_definition_repo(root)
+    clean = load_definition(str(root))
+    assert not clean.sha.startswith("dirty-")
+    (root / ".gitignore").write_text("profiles/secret-extra.yaml\n")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "ignore",
+        ],
+        check=True,
+    )
+    assert not load_definition(str(root)).sha.startswith("dirty-")
+    src = next((root / "profiles").glob("*.yaml"))
+    (root / "profiles" / "secret-extra.yaml").write_text(src.read_text())
+    assert load_definition(str(root)).sha.startswith("dirty-")

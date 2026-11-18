@@ -8,6 +8,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -447,12 +448,29 @@ def _git(cwd: Path, *args: str, env: dict[str, str] | None = None) -> subprocess
     )
 
 
-def _local_git_sha(root: Path) -> str | None:
-    """The HEAD sha if root is the top of a clean git work tree, else None."""
+def redact_source(source: str) -> str:
+    """The source with any user name or password in a URL removed (it is stored and logged)."""
+    parts = urlsplit(source)
+    if "://" in source and "@" in parts.netloc:
+        return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
+    return source
+
+
+def _local_git_sha(root: Path, files: dict[str, bytes]) -> str | None:
+    """HEAD sha if root is the top of a clean git work tree and every file read is tracked, else None.
+
+    A file that git ignores (so `status` does not show it) but the loader read would make the sha
+    describe different content than was loaded, so it forces the content-hash sha instead.
+    """
     top = _git(root, "rev-parse", "--show-toplevel")
     if top.returncode != 0 or Path(top.stdout.strip()).resolve() != root.resolve():
         return None
     if _git(root, "status", "--porcelain").stdout.strip():
+        return None
+    tracked = _git(root, "ls-files", "-z")
+    if tracked.returncode != 0:
+        return None
+    if not set(files) <= {t for t in tracked.stdout.split("\0") if t}:
         return None
     head = _git(root, "rev-parse", "HEAD")
     return head.stdout.strip() if head.returncode == 0 else None
@@ -477,6 +495,7 @@ def load_definition(
             DefinitionPolicy.from_settings(get_settings()),
             require_image_digest=mode is FactoryMode.SERVER,
         )
+    shown = redact_source(source)
     if _is_url(source):
         tmp = Path(tempfile.mkdtemp(prefix="factory-def-"))
         try:
@@ -491,10 +510,11 @@ def load_definition(
                 p = _git(tmp, *step, env=env)
                 if p.returncode != 0:
                     msg = (p.stderr.strip().splitlines() or ["git failed"])[-1]
-                    err = DefinitionError(source, None, "", msg)
-                    return LoadResult("", source, None, (err,))
+                    msg = msg.replace(source, shown)
+                    err = DefinitionError(shown, None, "", msg)
+                    return LoadResult("", shown, None, (err,))
             sha = _git(tmp, "rev-parse", "HEAD").stdout.strip()
-            return _finish(source, sha, _read_tree(tmp), policy, mode)
+            return _finish(shown, sha, _read_tree(tmp), policy, mode)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     root = Path(source).expanduser()
@@ -503,8 +523,8 @@ def load_definition(
         return LoadResult("", source, None, (err,))
     root = root.resolve()
     reader = _read_tree(root)
-    sha = _local_git_sha(root) or _dirty_sha(reader.files)
-    return _finish(source, sha, reader, policy, mode)
+    sha = _local_git_sha(root, reader.files) or _dirty_sha(reader.files)
+    return _finish(shown, sha, reader, policy, mode)
 
 
 def _finish(
