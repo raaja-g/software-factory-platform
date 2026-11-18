@@ -26,6 +26,16 @@ def split_csv(value: str | Sequence[str]) -> tuple[str, ...]:
     return tuple(s for s in (i.strip() for i in items) if s)
 
 
+# Paths the gateway-edge proxy forwards to the gateway (docker/gateway-edge.conf is checked
+# against this tuple). Everything else is refused with 403.
+EDGE_ALLOWED_PATHS: tuple[str, ...] = (
+    r"^/v1/chat/completions$",
+    r"^/v1/messages$",
+    r"^/v1/messages/count_tokens$",
+    r"^/v1/models$",
+    r"^/v1beta/models/[^/]+:(generateContent|streamGenerateContent|countTokens)$",
+)
+
 CsvTuple = Annotated[tuple[str, ...], NoDecode, BeforeValidator(split_csv)]
 
 
@@ -60,6 +70,28 @@ class Settings(BaseSettings):
     )
     host_repos_root: str | None = Field(default=None, validation_alias="FACTORY_HOST_REPOS_ROOT")
     host_home: str | None = Field(default=None, validation_alias="FACTORY_HOST_HOME")
+    docker_host: str = Field(
+        default_factory=lambda: os.environ.get("DOCKER_HOST") or "tcp://docker-proxy:2375",
+        validation_alias="FACTORY_DOCKER_HOST",
+    )
+    repos_dir: str = Field(default="/repos", validation_alias="FACTORY_REPOS_DIR")
+    max_bundle_mb: int = Field(default=2048, validation_alias="FACTORY_MAX_BUNDLE_MB")
+    gitops_timeout_s: int = Field(default=900, validation_alias="FACTORY_GITOPS_TIMEOUT_S")
+    disk_high_water_pct: int = Field(
+        default=85, ge=50, le=99, validation_alias="FACTORY_DISK_HIGH_WATER_PCT"
+    )
+    exec_output_max_bytes: int = Field(
+        default=2_000_000, ge=10_000, validation_alias="FACTORY_EXEC_OUTPUT_MAX_BYTES"
+    )
+    gateway_url: str = Field(
+        default="http://127.0.0.1:4000", validation_alias="FACTORY_GATEWAY_URL"
+    )
+    gateway_sandbox_url: str = Field(
+        default="http://gateway-edge:4000", validation_alias="FACTORY_GATEWAY_SANDBOX_URL"
+    )
+    gateway_master_key: SecretStr = Field(
+        default=SecretStr(""), validation_alias="LITELLM_MASTER_KEY"
+    )
 
     if TYPE_CHECKING:
 
@@ -84,9 +116,10 @@ class Settings(BaseSettings):
             value = getattr(self, name)
             if isinstance(value, SecretStr):
                 register_secret(value.get_secret_value())
-                pw = make_url(value.get_secret_value()).password
-                if pw:
-                    register_secret(pw)
+                if name == "database_url":
+                    pw = make_url(value.get_secret_value()).password
+                    if pw:
+                        register_secret(pw)
             elif name.endswith("_file") and isinstance(value, Path) and value.is_file():
                 register_secret(value.read_text().strip())
         return self

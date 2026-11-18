@@ -3,7 +3,6 @@ from tests.fakes.deps import DEFAULT_TIMEOUTS
 from tests.graph.test_loop import _bind, ctx, rows, run_job  # noqa: F401
 
 from swfactory.sandbox.base import ExecResult
-from swfactory.sandbox.fake import FakeSandboxProvider
 
 pytestmark = pytest.mark.db
 
@@ -31,30 +30,28 @@ async def test_verify_fail_twice_gates():
     _, st = await run_job(
         "happy.yaml", app={"test_command": "make test"}, exec_results=[er(1), er(1)]
     )
-    assert (st["gate_reason"], st["retry_node"]) == ("checks failed", "verify")
+    assert (st["gate_reason"], st["retry_node"]) == (
+        "checks failed: tests failed (exit 1)",
+        "verify",
+    )
+
+
+def gate_box(n: int):
+    return ctx.deps.sandboxes.isolated_boxes[f"gate-r1-a{n}"]
 
 
 async def test_verify_writes_verify_md():
     job, _ = await run_job("happy.yaml", app={"test_command": "make test"})
     got = await ctx.deps.artifacts.get_text(job.id, "verify.md")
-    assert got is not None
-    assert got.splitlines()[:3] == ["# Verify: passed", "command: make test", "exit code: 0"]
+    assert got is not None and got.startswith("# Verify") and "Status: PASSED" in got
+    assert ["sh", "-c", "make test"] not in gate_box(1).exec_calls
 
 
-async def test_verify_exec_timeout_from_definition(monkeypatch):
-    seen = []
-    orig = FakeSandboxProvider.ensure
-
-    async def spy(self, job_id, runner):
-        box = await orig(self, job_id, runner)
-        seen.append(box)
-        return box
-
-    monkeypatch.setattr(FakeSandboxProvider, "ensure", spy)
+async def test_verify_exec_timeout_from_definition():
     await run_job(
         "happy.yaml",
         app={"test_command": "make test"},
-        defaults={"step_timeouts_min": {**DEFAULT_TIMEOUTS, "verify": 2}},
+        defaults={"step_timeouts_min": {**DEFAULT_TIMEOUTS, "verify": 45}},
     )
-    box = seen[0]
-    assert box.exec_timeouts[box.exec_calls.index(["sh", "-c", "make test"])] == 120
+    box = gate_box(1)
+    assert box.exec_timeouts[box.exec_calls.index(["bash", "-lc", "make test"])] == 2700

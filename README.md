@@ -2,7 +2,7 @@
 
 A platform that turns a requirement into reviewed, merged code. For each feature it runs spec, build, verify, four independent reviews, approve and deliver, using coding agents on any model provider. It runs on your machine in Docker, many apps and features at a time.
 
-**Status: under construction.** Milestones M1 (foundation), M2 (the job loop) and M3 (roles and contracts) are done, along with the first half of M5 (models and cost). See [progress.md](progress.md) for the step-by-step status.
+**Status: under construction.** Milestones M1 to M5 are built: foundation, the job loop, roles and contracts, sandboxes with the verify gate and local git, and the model gateway with cost control. Still to come: the coding-agent adapters (M6), the local release with the dashboard (M7) and GitHub (M8). See [progress.md](progress.md) for the step-by-step status.
 
 ## What works now (M1 and M2)
 
@@ -25,7 +25,19 @@ A platform that turns a requirement into reviewed, merged code. For each feature
 - **Requirements jobs (M3).** A requirement becomes a `requirements.md` and an ordered backlog that a person approves; its feature jobs then run one after another, each merged before the next starts.
 - **Models and cost (first half of M5).** The LiteLLM gateway config is rendered from your definition (`factory gateway render`); a gateway client handles per-run keys, spend and probes; a model catalog records what is actually available (`factory models refresh`, `factory models list`); profiles choose a model per role, with a recorded fallback; budgets reserve spend per run so parallel runs cannot overspend.
 
-Still fake: no real coding agent runs yet. Sandboxes, the verify gate and local git come next (M4), then the rest of M5 and the engine adapters (M6).
+- **Sandboxes and the verify gate (M4).** Each job gets its own hardened container (non-root, read-only root, no capabilities, no credentials, its own network) on two volumes, started through a filtered Docker socket proxy. Runner images (`swfactory/runner`, `swfactory/runner-web` with Chromium) build with `docker compose --profile build build runner runner-web`. After every build the platform itself checks the work in a clean clone of the job branch: setup commands, the app's tests, protected paths, and browser screenshots for web apps. Reviewers get their own isolated copy that can run tests but not edit. A reaper removes orphaned containers, volumes and networks, and workspace size, disk space and output are capped.
+- **Local git and your folders (M4).** Finished work is merged with a pinned head: only the commit that was tested and approved is merged. For a local folder, the factory keeps its own copy and fast-forwards your folder's main afterwards, or waits for you if your tree is dirty. Jobs that wait for a person too long are closed, keeping their branch.
+- **Model gateway and cost (M5).** LiteLLM runs behind a route-allowlisting proxy (`docker compose up -d gateway gateway-edge`); every agent step gets a short-lived key capped to its model and budget, spend is read back and reconciled (including crashed runs), and a failing model falls back once to the next in the profile.
+
+To use the gateway you need these in `.env`: `LITELLM_MASTER_KEY`, `LITELLM_SALT_KEY`, `LITELLM_DB_PASSWORD`, `GOOGLE_CLOUD_PROJECT`, and an Application Default Credentials file for Vertex AI (`gcloud auth application-default login`); optional `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`. Then:
+
+```bash
+uv run factory gateway render
+docker compose up -d gateway gateway-edge
+uv run factory models refresh
+```
+
+Not yet verified against real models: the live checks (models refresh against Vertex) need your credentials and the Claude models enabled in Model Garden. No real coding agent runs yet: the adapters come in M6.
 
 ## Set up and run
 
@@ -56,8 +68,9 @@ Run the tests:
 uv run pytest                                   # no Docker or network needed
 export FACTORY_TEST_DATABASE_URL="postgresql+psycopg://factory:$(cat secrets/pg_password)@127.0.0.1:5432/postgres"
 uv run pytest -m db                             # needs the Postgres container
+uv run pytest -m docker                         # builds and uses real containers; needs the runner images
 ```
 
 ## Next
 
-M4: hardened Docker sandboxes, the verify gate, and local git (including delivery into a folder on your Mac). Then the gateway services and run keys (rest of M5), and the coding-agent adapters (M6).
+M6: the coding-agent adapters (OpenCode, Claude Code, Gemini CLI and a direct model call). Then the API, dashboard, CLI and local release with point-and-run and the package mirror (M7), and GitHub (M8).

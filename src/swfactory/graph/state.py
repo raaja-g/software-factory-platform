@@ -15,6 +15,8 @@ class ReviewTask(TypedDict):
     job_id: str
     round: int
     kind: str
+    screenshots: NotRequired[list[str]]
+    fan_out: NotRequired[int]  # reviewers started in this round (budget share)
 
 
 def merge_reviews(

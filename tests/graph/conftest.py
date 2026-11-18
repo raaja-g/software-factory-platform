@@ -14,7 +14,7 @@ from tests.support.m3_loop import collect
 
 from swfactory.db.repo import set_stage
 from swfactory.db.tables import AgentRun
-from swfactory.domain.types import Role, Stage
+from swfactory.domain.types import Role, Stage, ToolPolicy
 from swfactory.engines.fake import FakeScript
 from swfactory.engines.registry import get_engine
 from swfactory.gitops.fake import FakeGitService
@@ -22,7 +22,7 @@ from swfactory.graph.build import build_job_graph, initial_state
 from swfactory.graph.steps import StepOutcome, _runner, pinned_definition, run_agent_step
 from swfactory.queue import enqueue_job
 from swfactory.sandbox.base import RunnerSpec
-from swfactory.sandbox.paths import REPO
+from swfactory.sandbox.paths import OUT, REPO
 
 
 @pytest.fixture
@@ -41,7 +41,11 @@ async def step(sessions):
             for n, o in enumerate(outputs, 1)
         ]
         script.entries = [*script.entries, *FakeScript.from_dict({"turns": turns}).entries]
-        kw.setdefault("tool_policy", spec.tool_policy)
+        # read_run needs an isolated box (M4.8b); these tests run in the job box, so narrow it
+        default = (
+            ToolPolicy.READ_ONLY if spec.tool_policy == ToolPolicy.READ_RUN else spec.tool_policy
+        )
+        kw.setdefault("tool_policy", default)
         return await run_agent_step(
             deps,
             job_id=job.id,
@@ -111,6 +115,8 @@ def loop(sessions):
         deps = make_test_deps(sessions, script, git=FakeGitService(diff_paths=diff_paths))
         for path, text in artifacts.items():
             await deps.artifacts.put(job.id, path, text)
+            if path == "diff.patch":  # the gate stores the diff of its own box: give it this one
+                deps.sandboxes.verify_files[f"{OUT}/diff.patch"] = text.encode()  # type: ignore[attr-defined]
         row, defn, app_def = await pinned_definition(deps, job.id)
         box = await deps.sandboxes.ensure(job.id, _runner(defn, app_def))  # finalize destroys it
         g = build_job_graph(deps, InMemorySaver())

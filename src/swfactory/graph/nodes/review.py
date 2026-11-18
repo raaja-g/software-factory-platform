@@ -6,9 +6,17 @@ import structlog
 
 from swfactory.domain.types import RunStatus, ToolPolicy, Verdict, reviewer_role
 from swfactory.events import record_event
+from swfactory.graph import steps
 from swfactory.graph.deps import Deps
 from swfactory.graph.state import ReviewOutcome, ReviewTask
-from swfactory.graph.steps import run_agent_step
+from swfactory.graph.steps import (
+    _runner,
+    isolate_instructions,
+    pinned_definition,
+    review_attachments,
+    reviewer_box_name,
+    run_agent_step,
+)
 from swfactory.sandbox.paths import REPO
 
 log = structlog.get_logger(__name__)
@@ -22,16 +30,46 @@ def make(deps: Deps):
         outcome = ReviewOutcome(kind=kind, verdict=Verdict.ERROR.value, artifact="", run_id="")
         try:
             job_id = UUID(task["job_id"])
-            res = await run_agent_step(
-                deps,
-                job_id=job_id,
-                role=reviewer_role(kind),
-                round=rnd,
-                inputs=["feature.md", "app.md", "spec.md", "build.md", "verify.md"],
-                output_name=out_name,
-                workdir=REPO,
-                tool_policy=ToolPolicy.READ_ONLY,
-            )
+            role = reviewer_role(kind)
+            inputs = ["feature.md", "app.md", "spec.md", "build.md", "verify.md"]
+            attach = review_attachments(kind, task.get("screenshots", []))
+            engine = steps.role_engine(deps, job_id, role)
+            fan_out = task.get("fan_out", 1)
+            if engine == "direct":
+                # no box: the direct engine reads the attachments from the job box
+                res = await run_agent_step(
+                    deps,
+                    job_id=job_id,
+                    role=role,
+                    round=rnd,
+                    inputs=inputs,
+                    output_name=out_name,
+                    workdir=None,
+                    tool_policy=ToolPolicy.NONE,
+                    attachments=attach,
+                    engine=engine,
+                    fan_out=fan_out,
+                )
+            else:
+                _, defn, app = await pinned_definition(deps, job_id)
+                async with deps.sandboxes.isolated(
+                    job_id, _runner(defn, app), name=reviewer_box_name(kind, rnd)
+                ) as rbox:
+                    await isolate_instructions(deps, job_id, rbox)
+                    res = await run_agent_step(
+                        deps,
+                        job_id=job_id,
+                        role=role,
+                        round=rnd,
+                        inputs=inputs,
+                        output_name=out_name,
+                        workdir=REPO,
+                        tool_policy=ToolPolicy.READ_RUN,
+                        sandbox=rbox,
+                        attachments=attach,
+                        engine=engine,
+                        fan_out=fan_out,
+                    )
             outcome["run_id"] = str(res.run_id)
             if res.status == RunStatus.OK and res.verdict is not None:
                 outcome["verdict"] = res.verdict.value

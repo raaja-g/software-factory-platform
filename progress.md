@@ -4,7 +4,7 @@ Updated after every completed step.
 
 ## Now
 
-M3 is done; starting M4 (sandboxes, verify gate, local git). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
+M4 and M5 are done; starting M6 (the coding-agent adapters). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
 
 ## Plan revision (before coding)
 
@@ -70,6 +70,27 @@ M3 is done; starting M4 (sandboxes, verify gate, local git). M0's spikes wait fo
 - [x] **2026-11-18** M3 exit check: 413 default tests, 221 database tests, ruff and pyright clean. Fixed the cause of recurring timing failures in the worker tests (leases of 1 s were too tight under load; now 3 s).
 - [ ] M5.2 (gateway services in compose, needs M4.3a), M5.8 (wire into `run_agent_step`) and M5.9 wait for M4.
 
+## M4 Sandboxes, verify gate, local git and the second half of M5 (done)
+
+- [x] **2026-11-19** M4.1 Runner images and runner definitions
+- [x] **2026-11-19** M4.2 Hardened container template
+- [x] **2026-11-19** M4.3a Socket proxy, core network and repos volume
+- [x] **2026-11-19** M4.3b Docker sandbox provider and isolated containers
+- [x] **2026-11-19** M4.4 Sandbox reaper
+- [x] **2026-11-19** M4.4b Workspace size limit, disk high-water mark and output caps
+- [x] **2026-11-19** M4.5 Local git service
+- [x] **2026-11-19** M4.5b Local folders: seed, fetch and deliver into the folder
+- [x] **2026-11-19** M4.6 Verify gate
+- [x] **2026-11-19** M4.7 Browser smoke screenshots
+- [x] **2026-11-19** M4.8a Sandbox, gate and local git wired into the graph
+- [x] **2026-11-19** M4.8b Isolated reviewer containers and screenshot attachments
+- [x] **2026-11-19** M4.9 Close jobs that wait too long
+- [x] **2026-11-19** M5.2 Gateway services in compose, behind a route allowlist
+- [x] **2026-11-19** M5.8 Selection, run keys and spend wired into `run_agent_step`
+- [x] **2026-11-19** M5.9 Spend reconciliation and the reservation sweep
+- [x] **2026-11-19** M4 and M5 checked by me: 546 default, 289 database and 49 Docker tests pass; ruff and pyright clean; no containers, volumes or networks left over. The exit-check agent hung for 3 hours and was stopped.
+- [ ] **Needs you:** M5's live checks (`factory models refresh` against Vertex, the live probe test) need gcloud ADC, `GOOGLE_CLOUD_PROJECT`, and the Claude models enabled in Model Garden.
+
 ## Milestones
 
 Order for now: everything runs on your Mac. M0, then M1 to M8, then M10, M11 and M12. M9 (the GCP team instance) and the team-only parts of M13 wait until you ask for them. The private package mirror moves earlier, because your first apps need private packages.
@@ -80,8 +101,8 @@ Order for now: everything runs on your Mac. M0, then M1 to M8, then M10, M11 and
 | M1 Foundation | done |
 | M2 Loop with fakes | done |
 | M3 Roles, contracts, triage | done |
-| M4 Sandboxes, verify gate, local git | not started |
-| M5 Gateway, models, cost | first half done (M5.1, 5.3 to 5.7); the rest after M4 |
+| M4 Sandboxes, verify gate, local git | done |
+| M5 Gateway, models, cost | done in code; live Vertex checks need your setup |
 | M6 Engines | not started |
 | M7 API, dashboard, CLI, local release | not started |
 | M8 GitHub and automations | not started |

@@ -1,0 +1,13 @@
+description: Every role on the fake engine, for the M4 loop tests
+continuity: fresh
+roles:
+  spec-writer:       { engine: fake, model: fake }
+  requirements:      { engine: fake, model: fake }
+  builder:           { engine: fake, model: fake }
+  reviewer-security: { engine: fake, model: fake }
+  reviewer-code:     { engine: fake, model: fake }
+  reviewer-ux:       { engine: fake, model: fake }
+  reviewer-ui:       { engine: fake, model: fake }
+  approver:          { engine: fake, model: fake }
+  judge:             { engine: fake, model: fake }
+  improver:          { engine: fake, model: fake }

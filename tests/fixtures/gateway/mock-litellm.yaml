@@ -1,0 +1,8 @@
+model_list:
+  - model_name: mock
+    litellm_params:
+      model: openai/mock
+      api_key: mock
+      mock_response: "pong"
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

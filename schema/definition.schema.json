@@ -158,6 +158,17 @@
           "title": "Sensitive",
           "type": "boolean"
         },
+        "smoke": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SmokeConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "test_command": {
           "anyOf": [
             {
@@ -498,6 +509,14 @@
     "Defaults": {
       "additionalProperties": false,
       "properties": {
+        "claude_classifier_fallbacks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Claude Classifier Fallbacks",
+          "type": "array"
+        },
         "contract_repair_attempts": {
           "default": 1,
           "title": "Contract Repair Attempts",
@@ -571,6 +590,13 @@
           "title": "Max Rounds",
           "type": "integer"
         },
+        "max_turns": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Max Turns",
+          "type": "object"
+        },
         "profile": {
           "default": "team-gemini",
           "title": "Profile",
@@ -587,6 +613,13 @@
           },
           "title": "Step Timeouts Min",
           "type": "object"
+        },
+        "waiting_expiry_days": {
+          "default": 14,
+          "maximum": 365,
+          "minimum": 0,
+          "title": "Waiting Expiry Days",
+          "type": "integer"
         }
       },
       "title": "Defaults",
@@ -1028,6 +1061,13 @@
           "title": "Image",
           "type": "string"
         },
+        "max_work_gb": {
+          "default": 20,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Max Work Gb",
+          "type": "integer"
+        },
         "memory_mb": {
           "default": 4096,
           "title": "Memory Mb",
@@ -1138,6 +1178,50 @@
       ],
       "title": "SelectionMode",
       "type": "string"
+    },
+    "SmokeConfig": {
+      "additionalProperties": false,
+      "description": "Browser smoke test: the app is always reached at http://127.0.0.1:<port> in the gate box.",
+      "properties": {
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Paths",
+          "type": "array"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Port",
+          "type": "integer"
+        },
+        "ready_timeout_s": {
+          "default": 60,
+          "minimum": 1,
+          "title": "Ready Timeout S",
+          "type": "integer"
+        },
+        "screenshots": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Screenshots",
+          "type": "array"
+        },
+        "start_command": {
+          "title": "Start Command",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_command",
+        "port",
+        "paths",
+        "screenshots"
+      ],
+      "title": "SmokeConfig",
+      "type": "object"
     },
     "Tier": {
       "additionalProperties": false,
@@ -1401,6 +1485,7 @@
     "defaults": {
       "$ref": "#/$defs/Defaults",
       "default": {
+        "claude_classifier_fallbacks": [],
         "contract_repair_attempts": 1,
         "definition_poll_s": 300,
         "engine_retries": 2,
@@ -1415,6 +1500,10 @@
         "max_fix_attempts": 1,
         "max_job_crashes": 3,
         "max_rounds": 2,
+        "max_turns": {
+          "builder": 80,
+          "default": 40
+        },
         "profile": "team-gemini",
         "router_timeout_s": 2,
         "step_timeouts_min": {
@@ -1427,7 +1516,8 @@
           "spec": 15,
           "triage": 1,
           "verify": 15
-        }
+        },
+        "waiting_expiry_days": 14
       }
     },
     "improver": {

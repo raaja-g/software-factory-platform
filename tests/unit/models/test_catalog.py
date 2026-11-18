@@ -104,6 +104,7 @@ def test_refresh_needs_a_gateway():
 
 def _defn() -> Definition:
     f = yaml.safe_load(Path("defaults/factory.yaml").read_text())
+    f["defaults"]["claude_classifier_fallbacks"] = []
     f["models"] = {
         "flash@vertex": {"provider": "vertex", "upstream_id": "gf", "strength": "mid"},
         "pro@vertex": {"provider": "vertex", "upstream_id": "gp", "strength": "strong"},

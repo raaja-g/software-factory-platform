@@ -115,7 +115,11 @@ def make_error_handler(
             node in _NO_HANDLER_GATE and not gate_all
         ):  # L13, L14: scoring never reaches a person; finalize runs after the outcome
             return Command(goto=END)
-        return Command(goto="human_gate", update=failure_update(node))
+        update = failure_update(node)
+        reason = getattr(cause, "gate_reason", None)  # BudgetExceeded, NoModelAvailable
+        if isinstance(reason, str) and reason:
+            update["gate_reason"] = reason
+        return Command(goto="human_gate", update=update)
 
     handler.__name__ = f"on_error_{node}"
     return handler
@@ -197,7 +201,6 @@ def build_job_graph(
         kwargs["error_handler"] = make_error_handler(name)
         g.add_node(name, _leased(deps, _paused(name, makers[name].make(deps))), **kwargs)
     g.add_edge(START, "prepare")
-    g.add_edge("prepare", "triage")
     g.add_edge("triage", "spec")
     g.add_edge("review", "after_reviews")
     g.add_edge("finalize", "score")

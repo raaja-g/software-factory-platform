@@ -13,6 +13,9 @@ from swfactory.gitops.service import (
     DiffStat,
     GitService,
 )
+from swfactory.queue import branch_name
+from swfactory.sandbox.base import ExecResult
+from swfactory.sandbox.paths import REPO
 
 if TYPE_CHECKING:
     from swfactory.db.tables import Job
@@ -51,6 +54,13 @@ class FakeGitService(GitService):
 
     async def prepare(self, job: Job, app: AppDef, box: Sandbox) -> str:
         self._call("prepare")
+        seq, slug = getattr(job, "seq", None), getattr(job, "slug", None)
+        replies = getattr(box, "git_replies", None)
+        if seq is not None and slug is not None and isinstance(replies, dict):
+            replies["symbolic-ref"] = ExecResult(
+                0, f"refs/heads/{branch_name(seq, slug)}\n", "", False, 0.0
+            )
+        await box.write_text(f"{REPO}/.git/HEAD", "ref: refs/heads/main\n")
         return ZERO
 
     async def rebase(self, job: Job, app: AppDef, box: Sandbox) -> bool:

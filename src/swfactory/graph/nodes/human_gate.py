@@ -17,6 +17,7 @@ from swfactory.graph.routing import (
     transition,
 )
 from swfactory.graph.state import JobState
+from swfactory.graph.steps import job_head
 
 
 def make(deps: Deps):
@@ -65,6 +66,7 @@ def make(deps: Deps):
 
     async def human_gate(state: JobState) -> Command:
         is_req = state.get("kind") == "requirements"
+        shown = None if is_req else await job_head(deps, job_uuid(state))
         value = interrupt(
             {
                 "reason": state.get("gate_reason"),
@@ -80,6 +82,8 @@ def make(deps: Deps):
                 await deps.artifacts.put(job_uuid(state), path, note)
         await _emit_action_once(state, human)
         update: dict = {"human": human}
+        if not is_req and human.get("action") == HumanAction.APPROVE.value:
+            update["approved_head"] = human.get("head_sha") or shown
         new = merged(state, update)
         if is_req:
             target = route_requirements_gate(new)

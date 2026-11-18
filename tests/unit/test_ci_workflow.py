@@ -54,3 +54,12 @@ def test_ci_db_job():
         for r in runs
     )
     assert any(r in ("docker compose up -d --wait postgres", "make test-db") for r in runs)
+
+
+def test_ci_docker_job_builds_images_and_sets_db():
+    steps = yaml.safe_load(CI.read_text())["jobs"]["docker"]["steps"]
+    runs = [s.get("run", "").strip() for s in steps]
+    build = runs.index("docker compose --profile build build runner runner-web")
+    test = next(i for i, r in enumerate(runs) if r.endswith("uv run pytest -m docker -q"))
+    assert build < test and runs[test].startswith("FACTORY_TEST_DATABASE_URL=")
+    assert any(r in ("docker compose up -d --wait postgres", "make test-db") for r in runs[:test])

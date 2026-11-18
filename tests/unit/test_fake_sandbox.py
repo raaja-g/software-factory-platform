@@ -1,6 +1,8 @@
 from uuid import uuid4
 
-from swfactory.sandbox.base import ExecResult, RunnerSpec
+import pytest
+
+from swfactory.sandbox.base import ExecResult, RunnerSpec, TransferTooLarge, running
 from swfactory.sandbox.fake import FakeSandboxProvider
 from swfactory.sandbox.paths import IN
 
@@ -56,3 +58,64 @@ async def test_provider_ensure_destroy_reap():
     assert p.destroyed == [A] and await p.ensure(A, RUNNER) is not b1
     await p.ensure(B, RUNNER)
     assert await p.reap_orphans(live={A}, active=set()) == 1
+
+
+async def test_fake_isolated_is_separate():
+    provider = FakeSandboxProvider()
+    async with provider.isolated(J, RUNNER, name="review-code-r1") as iso:
+        await iso.write_text("/work/x", "1")
+    assert provider.isolated_names == ["review-code-r1"]
+    assert await (await provider.ensure(J, RUNNER)).read_text("/work/x") is None
+    assert provider.isolated_boxes["review-code-r1"] is iso
+
+
+async def test_fake_verify_box_feeds_isolated():
+    provider = FakeSandboxProvider()
+    async with provider.verify_box(J, RUNNER, name="gate-r1-a1", head="a" * 40) as vb:
+        await vb.write_text("/work/.factory/in/screenshots/home.png", "png")
+    async with provider.isolated(J, RUNNER, name="review-code-r1") as iso:
+        assert await iso.read_text("/work/.factory/in/screenshots/home.png") == "png"
+    assert provider.verify_calls == [("gate-r1-a1", "a" * 40)]
+    assert provider.isolated_boxes["gate-r1-a1"] is vb
+
+
+async def test_fake_copy_in_and_out(tmp_path):
+    box = await FakeSandboxProvider().ensure(J, RUNNER)
+    (tmp_path / "a").write_bytes(b"x" * 10)
+    await box.copy_in(tmp_path / "a", "/work/.factory/git/a.bundle")
+    assert await box.copy_out("/work/.factory/git/a.bundle", tmp_path / "b", max_bytes=10) == 10
+    with pytest.raises(TransferTooLarge):
+        await box.copy_out("/work/.factory/git/a.bundle", tmp_path / "c", max_bytes=9)
+
+
+async def test_running_starts_and_stops():
+    box = await FakeSandboxProvider().ensure(J, RUNNER)
+    calls: list[str] = []
+    box.start = lambda: _rec(calls, "start")  # type: ignore[method-assign]
+    box.stop = lambda: _rec(calls, "stop")  # type: ignore[method-assign]
+    async with running(box) as b:
+        assert b is box and calls == ["start"]
+    assert calls == ["start", "stop"]
+
+
+async def _rec(calls: list[str], what: str) -> None:
+    calls.append(what)
+
+
+async def test_fake_git_replies_and_prepared_branch():
+    from types import SimpleNamespace
+
+    from swfactory.gitops.fake import FakeGitService
+    from swfactory.queue import branch_name
+
+    job = SimpleNamespace(id=uuid4(), seq=7, slug="fix-it")
+    p = FakeSandboxProvider()
+    box = await p.ensure(job.id, RUNNER)
+    box.git_replies["show b:AGENTS.md"] = er(128)
+    await FakeGitService().prepare(job, SimpleNamespace(), box)  # type: ignore[arg-type]
+    r = await box.exec(["git", "-c", "core.pager=cat", "symbolic-ref", "HEAD"])
+    assert r.stdout == f"refs/heads/{branch_name(job.seq, job.slug)}\n"
+    assert (await box.exec(["git", "show", "b:AGENTS.md"])).exit_code == 128
+    assert (await box.exec(["git", "show", "x"])).stdout == box.head + "\n"
+    async with p.verify_box(job.id, RUNNER, name="gate-r1-a1", head=box.head) as vb:
+        assert vb.git_replies == box.git_replies

@@ -17,3 +17,10 @@ def test_compose_postgres():
     assert svc["environment"]["POSTGRES_PASSWORD_FILE"] == "/run/secrets/pg_password"
     assert svc["secrets"] == ["pg_password"]
     assert all(p.startswith("127.0.0.1:") for p in svc.get("ports", []))
+
+
+def test_compose_runner_build_services():
+    doc = yaml.safe_load(Path("compose.yaml").read_text())
+    assert {"postgres", "runner", "runner-web"} <= set(doc["services"])
+    for name in ("runner", "runner-web"):
+        assert doc["services"][name]["profiles"] == ["build"]

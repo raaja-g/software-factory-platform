@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from swfactory.gateway.client import ProbeResult
@@ -15,6 +16,8 @@ class FakeGateway:
     def __init__(self) -> None:
         self.probes: dict[str, ProbeResult | Exception] = {}
         self.spend: dict[str, Decimal] = {}
+        self.spend_reads: list[Decimal] = []
+        self.call_log: list[tuple[str, Any]] = []
         self.context_windows: dict[str, int] = {}
         self.mint_error: Exception | None = None
         self.revoke_error: Exception | None = None
@@ -53,6 +56,9 @@ class FakeGateway:
         return key
 
     async def key_spend(self, key: str) -> Decimal:
+        self.call_log.append(("key_spend", key))
+        if self.spend_reads:  # scripted reads: the last one repeats
+            return self.spend_reads.pop(0) if len(self.spend_reads) > 1 else self.spend_reads[0]
         return self.spend.get(key, Decimal(0))
 
     async def revoke(self, key: str) -> None:

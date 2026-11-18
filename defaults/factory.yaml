@@ -7,6 +7,9 @@ defaults:
   max_fix_attempts: 1
   max_backlog_items: 30
   judge_sampling: 0.10
+  # Claude Code's safety classifier may call these; claude_code run keys allow them too.
+  # R02's three ids; M0-S2.i must confirm the ids Claude Code actually requests.
+  claude_classifier_fallbacks: [claude-opus-4-8@vertex, claude-opus-5@vertex, claude-sonnet-5@vertex]
 
 budgets:
   job_usd: 10

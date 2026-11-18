@@ -188,6 +188,15 @@ async def test_interrupt_sets_needs_human_and_releases():
     assert ev.data["artifacts"][0] == "decision.md"
 
 
+async def test_waiting_job_branch_kept_before_needs_human():
+    await seeded()
+    await work("escalate.yaml")
+    j = await job()
+    assert ctx.deps.git.calls[-1] == "keep_branch" and j.stage == "needs_human"
+    (ev,) = await events("human.waiting")
+    assert ev.data["head_sha"] == "0" * 40
+
+
 async def test_drive_job_binds_job_id(capsys):
     import json
 
@@ -445,7 +454,8 @@ async def test_definition_activated_mid_job_does_not_change_running_job(tmp_path
 
     async def ensure(self, job_id, runner):
         box = await real_ensure(self, job_id, runner)
-        seen.append(box)
+        if self not in seen:
+            seen.append(self)
         return box
 
     monkeypatch.setattr(FakeSandboxProvider, "ensure", ensure)
@@ -465,10 +475,10 @@ async def test_definition_activated_mid_job_does_not_change_running_job(tmp_path
     await t
     j = await job()
     assert (j.stage, j.definition_sha) == ("merged", pinned)
-    calls = [c for b in seen for c in b.exec_calls]
-    assert ["sh", "-c", "make test"] in calls and ["sh", "-c", "make other"] not in calls
-    box = seen[0]
-    assert box.exec_timeouts[box.exec_calls.index(["sh", "-c", "make test"])] == 900
+    gate_box = seen[0].isolated_boxes["gate-r1-a1"]
+    assert ["bash", "-lc", "make test"] in gate_box.exec_calls
+    assert ["bash", "-lc", "make other"] not in gate_box.exec_calls
+    assert gate_box.exec_timeouts[gate_box.exec_calls.index(["bash", "-lc", "make test"])] == 900
 
 
 def test_cli_worker_needs_a_fake_script():

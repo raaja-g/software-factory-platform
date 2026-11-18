@@ -53,6 +53,7 @@ from swfactory.domain.types import (
 from swfactory.engines.fake import FakeEngine, FakeScript
 from swfactory.engines.registry import register_engine
 from swfactory.events import EventBus, record_event
+from swfactory.expiry import EXPIRY_TICK_S, expire_waiting_jobs
 from swfactory.gitops.fake import FakeGitService
 from swfactory.graph.build import (
     GRAPH_COMPAT,
@@ -63,12 +64,25 @@ from swfactory.graph.build import (
     node_timeouts,
 )
 from swfactory.graph.deps import Deps, unavailable
-from swfactory.graph.steps import _runner, pinned_definition, step_budget_s
+from swfactory.graph.steps import (
+    _runner,
+    job_head,
+    keep_job_branch,
+    pinned_definition,
+    step_budget_s,
+)
 from swfactory.logging import log_context
 from swfactory.models.triage import TriageService
 from swfactory.queue import claim_next_job, release_job, renew_lease
 from swfactory.roles.library import RoleLibrary
+from swfactory.sandbox.disk import (
+    WORKSPACE_CHECK_S,
+    claim_new_allowed,
+    disk_paths,
+    disk_usage_pct,
+)
 from swfactory.sandbox.fake import FakeSandboxProvider
+from swfactory.sandbox.reaper import REAP_INTERVAL_S, reconcile
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -101,26 +115,31 @@ def build_worker_deps(
         raise ValueError("no engines yet: pass --fake-script (real engines arrive in M6)")
     register_engine(FakeEngine(FakeScript.from_yaml(fake_script)))
     definitions = DefinitionStore(sessions, mode=settings.mode)
-    catalog: Any = unavailable("catalog", "M5")
-    gateway: Any = unavailable("gateway", "M5")
+    from swfactory.costs.budgets import BudgetService
+    from swfactory.engines.fake import FakeRunGateway, FakeSelector
+    from swfactory.models.catalog import Catalog
+
+    catalog: Any = Catalog(sessions, None, definitions)
+    # the fake engine mints and spends nothing: run keys stay in-process until M6's engines
+    gateway: Any = FakeRunGateway()
     gateway_url = getattr(settings, "gateway_url", None)
     master_key = getattr(settings, "gateway_master_key", None)
     if gateway_url and master_key is not None:
         from swfactory.gateway.client import GatewayClient
-        from swfactory.models.catalog import Catalog
 
-        gateway = GatewayClient(gateway_url, master_key.get_secret_value())
-        catalog = Catalog(sessions, gateway, definitions)
+        catalog = Catalog(
+            sessions, GatewayClient(gateway_url, master_key.get_secret_value()), definitions
+        )
     artifacts = ArtifactStore(sessions, settings.artifacts_dir)
     return Deps(
         sessions=sessions,
         events=EventBus(sessions, settings.libpq_dsn()),
         artifacts=artifacts,
         sandboxes=FakeSandboxProvider(),  # pyright: ignore[reportArgumentType]
-        selector=unavailable("selector", "M5"),
+        selector=FakeSelector(sessions),
         catalog=catalog,
         gateway=gateway,
-        budgets=unavailable("budgets", "M5"),
+        budgets=BudgetService(sessions, definitions),
         git=FakeGitService(state_path=fake_git_state),
         roles=RoleLibrary(),
         triage=TriageService(definitions, artifacts),
@@ -174,6 +193,7 @@ async def _renew_loop(
             log.warning("worker.renew_failed", error=repr(exc))
         if ok:
             last_ok = time.monotonic()
+            continue
         elif ok is False:
             log.warning("worker.lease_lost", job_id=str(job_id))
         elif time.monotonic() < deadline:
@@ -382,15 +402,7 @@ async def _cancel_job(
     # a sandbox exists once the graph has started (its first node creates it)
     started = await checkpointer.aget_tuple({"configurable": {"thread_id": str(job.id)}})
     if started is not None:
-        try:
-            row, defn, app = await pinned_definition(deps, job.id)
-            box = await deps.sandboxes.ensure(job.id, _runner(defn, app))
-            try:
-                await deps.git.keep_branch(row, app, box)
-            except Exception as exc:  # the sandbox is destroyed all the same
-                log.warning("worker.keep_branch_failed", error=repr(exc))
-        except Exception as exc:
-            log.warning("worker.cancel_cleanup_failed", error=repr(exc))
+        await keep_job_branch(deps, job.id)  # starts the sandbox if it is stopped; never raises
         try:
             await deps.sandboxes.destroy(job.id)
         except Exception as exc:
@@ -420,6 +432,11 @@ async def _settle(
     consume: tuple[UUID, int] | None = None,
 ) -> None:
     interrupts = result.get("__interrupt__") or []
+    head_sha: str | None = None
+    if interrupts and job.kind != "requirements":
+        # a waiting job's commits must reach the bare repo before anyone is told to look
+        await keep_job_branch(deps, job.id)
+        head_sha = await job_head(deps, job.id)
     async with deps.sessions.begin() as s:
         await _guard(deps, s, job.id, worker_id, lease_epoch)
         if consume is not None:  # the checkpoint shows the interrupt answered
@@ -439,6 +456,7 @@ async def _settle(
                     "reason": value.get("reason"),
                     "retry_node": value.get("retry_node"),
                     "artifacts": value.get("artifacts") or [],
+                    "head_sha": head_sha,
                 },
             )
             return
@@ -665,6 +683,97 @@ async def _catalog_loop(catalog: Any, interval_s: float = CATALOG_TICK_S) -> Non
         await asyncio.sleep(interval_s)
 
 
+async def cost_tick(deps: Deps) -> None:
+    """One spend reconcile (M5.9): never raises (the next tick tries again)."""
+    from swfactory.costs.reconcile import reconcile_tick
+
+    try:
+        res = await reconcile_tick(deps, now=datetime.now(UTC))
+        if res is not None and (res.costs_filled or res.reservations_released):
+            log.info(
+                "costs.reconciled",
+                costs_filled=res.costs_filled,
+                reservations_released=res.reservations_released,
+            )
+    except Exception as exc:
+        log.warning("costs.reconcile_failed", error=repr(exc))
+
+
+async def _cost_loop(deps: Deps, interval_s: float = CATALOG_TICK_S) -> None:
+    while True:
+        await catalog_tick(deps.catalog)
+        await cost_tick(deps)
+        await asyncio.sleep(interval_s)
+
+
+async def reap_tick(deps: Deps) -> None:
+    """One sandbox reconcile: never raises (the next tick tries again)."""
+    try:
+        removed = await reconcile(deps.sandboxes, deps.sessions)
+        if removed:
+            log.info("sandbox.reaped", count=removed)
+    except Exception as exc:
+        log.warning("sandbox.reap_failed", error=repr(exc))
+
+
+async def workspace_tick(deps: Deps) -> None:
+    """One workspace size check: never raises (the next tick tries again)."""
+    try:
+        over = await deps.sandboxes.check_workspaces()
+        if over:
+            log.warning("sandbox.workspaces_over_limit", count=len(over))
+    except Exception as exc:
+        log.warning("sandbox.workspace_check_failed", error=repr(exc))
+
+
+async def _workspace_loop(deps: Deps, interval_s: float = WORKSPACE_CHECK_S) -> None:
+    while True:
+        await workspace_tick(deps)
+        await asyncio.sleep(interval_s)
+
+
+def _disk_allows_claim(settings: Settings, state: dict[str, bool]) -> bool:
+    """False while the fullest watched disk is over the high-water mark; logs each crossing."""
+    try:
+        pct, path = disk_usage_pct(disk_paths(settings))
+    except OSError as exc:
+        log.warning("worker.disk_check_failed", error=repr(exc))
+        return True
+    ok = claim_new_allowed(pct, settings.disk_high_water_pct)
+    if not ok and not state["high"]:
+        log.warning("worker.disk_high", pct=pct, path=path)
+    elif ok and state["high"]:
+        log.info("worker.disk_ok", pct=pct)
+    state["high"] = not ok
+    return ok
+
+
+async def _reap_loop(deps: Deps, interval_s: float = REAP_INTERVAL_S) -> None:
+    while True:
+        await reap_tick(deps)
+        await asyncio.sleep(interval_s)
+
+
+async def expiry_tick(deps: Deps) -> None:
+    """One expiry pass over waiting jobs: never raises (the next tick tries again)."""
+    try:
+        _, defn = await deps.definitions.active()
+        days = defn.factory.defaults.waiting_expiry_days
+        closed = await expire_waiting_jobs(deps, now=datetime.now(UTC), days=days)
+        if closed:
+            log.info("job.expired", count=len(closed))
+    except NoActiveDefinition:
+        pass
+    except Exception as exc:
+        log.warning("job.expiry_failed", error=repr(exc))
+
+
+async def _expiry_loop(deps: Deps, interval_s: float = EXPIRY_TICK_S) -> None:
+    while True:
+        await expiry_tick(deps)
+        await asyncio.sleep(interval_s)
+
+
 async def _shutdown(
     deps: Deps, driving: dict[UUID, asyncio.Task[None]], epochs: dict[UUID, int], worker_id: str
 ) -> None:
@@ -707,11 +816,11 @@ async def _loop(
     listener = asyncio.create_task(_listen(settings.libpq_dsn(), wake))
     from swfactory.models.catalog import Catalog
 
-    ticker = (
-        asyncio.create_task(_catalog_loop(deps.catalog))
-        if isinstance(deps.catalog, Catalog)
-        else None
-    )
+    ticker = asyncio.create_task(_cost_loop(deps)) if isinstance(deps.catalog, Catalog) else None
+    reaper = asyncio.create_task(_reap_loop(deps))
+    workspaces = asyncio.create_task(_workspace_loop(deps))
+    expirer = asyncio.create_task(_expiry_loop(deps))
+    disk_state = {"high": False}
     try:
         while True:
             wake.clear()
@@ -733,11 +842,13 @@ async def _loop(
                     )
                 if found is not None:
                     job, command = found
-                else:
+                elif _disk_allows_claim(settings, disk_state):
                     async with deps.sessions() as s:
                         job = await claim_next_job(
                             s, worker_id=worker_id, lease_s=lease_s, exclude=set(driving)
                         )
+                else:
+                    job = None
                 if job is None:
                     break
                 claimed = True
@@ -769,10 +880,19 @@ async def _loop(
                         w.cancel()
     finally:
         listener.cancel()
+        reaper.cancel()
+        workspaces.cancel()
+        expirer.cancel()
         if ticker is not None:
             ticker.cancel()
         for task in driving.values():
             task.cancel()
         await asyncio.gather(
-            listener, *([ticker] if ticker else []), *driving.values(), return_exceptions=True
+            listener,
+            reaper,
+            workspaces,
+            expirer,
+            *([ticker] if ticker else []),
+            *driving.values(),
+            return_exceptions=True,
         )

@@ -2,5 +2,5 @@ image: swfactory/runner-web:0.1.0
 cpus: 2.0
 memory_mb: 4096
 pids: 512
-allowed_hosts: []
+allowed_hosts: [pypi.org, files.pythonhosted.org, registry.npmjs.org, github.com]
 setup_commands: []

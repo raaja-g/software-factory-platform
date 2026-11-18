@@ -4,6 +4,7 @@ from langgraph.types import Send
 from swfactory.domain.types import DEFAULT_REVIEWERS, Decision
 from swfactory.graph.routing import (
     budget_update,
+    deliverable_heads,
     failure_update,
     gate_artifacts,
     guard_decision,
@@ -45,7 +46,7 @@ def rv(round_, verdicts):
 def test_verify_pass_or_skip_fans_out():
     for status in ("passed", "skipped"):
         assert route_after_verify(s(verify_status=status)) == [
-            Send("review", {"job_id": "j", "round": 1, "kind": k})
+            Send("review", {"job_id": "j", "round": 1, "kind": k, "fan_out": 4})
             for k in ("security", "ux", "ui", "code")
         ]
 
@@ -205,3 +206,24 @@ def test_cut_diff_gate_reason_wins():
         "retry_node": None,
     }
     assert REASON_DIFF_TOO_LARGE == "diff too large to review fully"
+
+
+def test_verify_gate_reasons_and_error_routing():
+    assert transition(s(), "verify", "human_gate") == {
+        "gate_reason": "checks failed",
+        "retry_node": "verify",
+    }
+    failed = s(verify_status="failed", verify_reason="tests failed (exit 1)")
+    assert (
+        transition(failed, "verify", "human_gate")["gate_reason"]
+        == "checks failed: tests failed (exit 1)"
+    )
+    error = s(verify_status="error", verify_reason="rebase conflict")
+    assert transition(error, "verify", "human_gate")["gate_reason"] == "rebase conflict"
+    assert route_after_verify(s(verify_status="error", fix_attempts=0)) == "human_gate"
+
+
+def test_deliverable_heads_follow_recorded_rebases():
+    # a crash or Retry after deliver's rebase must still accept the rebased head
+    assert deliverable_heads("a", [("a", "b"), ("x", "y"), ("b", "c")]) == {"a", "b", "c"}
+    assert deliverable_heads("a", []) == {"a"}

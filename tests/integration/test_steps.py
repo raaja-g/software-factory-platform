@@ -6,6 +6,7 @@ from sqlalchemy import select
 from tests.fakes.deps import DEFAULT_TIMEOUTS, make_test_deps, seed_demo
 from tests.support.db_helpers import enq
 
+from swfactory.costs.budgets import BudgetExceeded
 from swfactory.db.tables import AgentRun, JobEvent
 from swfactory.definition.models import Defaults
 from swfactory.domain.types import AgentResult, Role, RunStatus, ToolPolicy, Usage, Verdict
@@ -282,9 +283,11 @@ async def test_unavailable_model_is_not_retried_on_same_model(env, monkeypatch):
 
 
 async def test_budget_is_not_retried(env):
-    out = await env.build_step(env.deps_for([{"role": "builder", "round": 1, "status": "budget"}]))
-    assert out.status == RunStatus.BUDGET
-    assert len(await env.rows(Role.BUILDER)) == 1
+    with pytest.raises(BudgetExceeded) as ei:
+        await env.build_step(env.deps_for([{"role": "builder", "round": 1, "status": "budget"}]))
+    assert ei.value.gate_reason == "budget"
+    rows = await env.rows(Role.BUILDER)
+    assert [r.status for r in rows] == ["budget"]  # the run row is written before the raise
 
 
 async def test_missing_verdict_line_is_error(env):

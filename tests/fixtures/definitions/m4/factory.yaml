@@ -1,0 +1,77 @@
+schemaVersion: factory/v1
+name: factory
+
+defaults:
+  profile: fake
+  max_rounds: 2
+  max_fix_attempts: 1
+  max_backlog_items: 30
+  judge_sampling: 0.10
+
+budgets:
+  job_usd: 10
+  daily_usd: 150
+
+concurrency: { global: 2, per_app: 1 }
+
+providers:                               # secrets are env var names only
+  vertex:     { kind: vertex_ai, project_env: GOOGLE_CLOUD_PROJECT, location: global }
+  gemini:     { kind: gemini, api_key_env: GEMINI_API_KEY }
+  groq:       { kind: groq, api_key_env: GROQ_API_KEY }
+  openrouter: { kind: openrouter, api_key_env: OPENROUTER_API_KEY }
+  lm_studio:  { kind: lm_studio, base_url: http://host.docker.internal:1234/v1 }
+  ollama:     { kind: ollama, base_url: http://host.docker.internal:11434 }
+
+# Private package registries. One example per upstream kind (uncomment and edit):
+#   acme-npm:                              # Artifact Registry, token minted per job
+#     { kind: npm, upstream: artifact_registry, url: "https://us-npm.pkg.dev/acme/js/", scopes: ["@acme"] }
+#   acme-gh:                               # GitHub Packages (npm only), token minted per job
+#     { kind: npm, upstream: github_packages, url: "https://npm.pkg.github.com/", scopes: ["@acme-gh"] }
+#   acme-pypi:                             # any registry with a static token in .env
+#     { kind: pypi, upstream: token, url: "https://pypi.example.com/simple/", scopes: ["acme-"], credential: REGISTRY_ACME_TOKEN }
+registries: {}
+
+models:                                  # aliases; strength is the model's class
+  claude-opus@vertex:     { provider: vertex, upstream_id: claude-opus-5-5,       strength: strong }
+  claude-sonnet@vertex:   { provider: vertex, upstream_id: claude-sonnet-5-5,     strength: strong }
+  claude-haiku@vertex:    { provider: vertex, upstream_id: claude-haiku-5-5,      strength: cheap }
+  claude-opus-4-8@vertex: { provider: vertex, upstream_id: claude-opus-4-8,       strength: strong }
+  claude-opus-5@vertex:   { provider: vertex, upstream_id: claude-opus-5,         strength: strong }
+  claude-sonnet-5@vertex: { provider: vertex, upstream_id: claude-sonnet-5,       strength: strong }
+  gemini-pro@vertex:      { provider: vertex, upstream_id: gemini-4-argon,        strength: strong }
+  gemini-flash@vertex:    { provider: vertex, upstream_id: gemini-3.8-flash,      strength: mid }
+  gemini-lite@vertex:     { provider: vertex, upstream_id: gemini-3.5-flash-lite, strength: cheap }
+  coder@groq:             { provider: groq,       upstream_id: "<model-id>", strength: cheap }
+  coder@openrouter:       { provider: openrouter, upstream_id: "<model-id>", strength: cheap }
+  fake:                   { provider: ollama,     upstream_id: fake, strength: local, price_in_per_mtok: 0, price_out_per_mtok: 0 }
+  local@ollama:           { provider: ollama,     upstream_id: "<model>",    strength: local, price_in_per_mtok: 0, price_out_per_mtok: 0 }
+
+apps:
+  pyapp:
+    repo_kind: local
+    repo_url: pyapp
+    merge_policy: local_merge
+    profile: fake
+    protected_paths: [".github/"]
+  nodeapp:
+    repo_kind: local
+    repo_url: nodeapp
+    merge_policy: local_merge
+    profile: fake
+  webapp:
+    repo_kind: local
+    repo_url: webapp
+    merge_policy: local_merge
+    profile: fake
+    runner: web
+    smoke:
+      start_command: "python3 app.py"
+      port: 8000
+      paths: ["/", "/about"]
+      screenshots: ["home", "about"]
+
+triage:
+  mode: rules
+  rules: []
+
+improver: { enabled: false, failed_run_threshold: 25, max_failure_age_days: 7 }

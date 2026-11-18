@@ -1,5 +1,6 @@
 """Pure routing functions for the job graph. No I/O."""
 
+from collections.abc import Sequence
 from typing import Any
 
 from langgraph.types import Send
@@ -12,15 +13,58 @@ from swfactory.domain.types import (
     Verdict,
     VerifyStatus,
 )
+from swfactory.gitops.service import (
+    REASON_FOLDER_DIRTY,
+    REASON_FOLDER_MOVED,
+    REASON_HEAD_MISMATCH,
+    REASON_NOTHING_TO_DELIVER,
+)
 from swfactory.graph.state import JobState, ReviewTask
+from swfactory.verify.gate import (
+    REASON_HEAD_NOT_ON_BRANCH,
+    REASON_NOT_ON_BASE,
+    REASON_REBASE_CONFLICT,
+    REASON_TEST_COMMAND_CHANGED,
+)
+
+__all__ = [
+    "REASON_FOLDER_DIRTY",
+    "REASON_FOLDER_MOVED",
+    "REASON_HEAD_MISMATCH",
+    "REASON_HEAD_NOT_ON_BRANCH",
+    "REASON_NOTHING_TO_DELIVER",
+    "REASON_NOT_ON_BASE",
+    "REASON_REBASE_CONFLICT",
+    "REASON_TEST_COMMAND_CHANGED",
+]
 
 _OK_VERDICTS = frozenset({Verdict.PASS.value, Verdict.SKIPPED.value})
 REASON_REVIEWER_FAILED = "reviewer failed"
 REASON_CHECKS_FAILED = "checks failed"
+REASON_SETUP_FAILED = "setup failed"
+REASON_MERGE_CONFLICT = "merge conflict"
 REASON_APPROVER_ESCALATED = "approver escalated"
 REASON_BUDGET = "budget"
 REASON_HUMAN_APPROVAL = "human approval required (triage)"
 REASON_DIFF_TOO_LARGE = "diff too large to review fully"
+
+
+def verify_gate_reason(status: str, reason: str | None) -> str:
+    """The gate reason for a verify result that did not pass."""
+    if status == VerifyStatus.ERROR.value and reason:
+        return reason
+    return f"{REASON_CHECKS_FAILED}: {reason}" if reason else REASON_CHECKS_FAILED
+
+
+def deliverable_heads(approved_head: str, rebases: Sequence[tuple[str, str]]) -> frozenset[str]:
+    """The approved head plus every head reached from it through the recorded rebases, in order."""
+    heads = {approved_head}
+    current = approved_head
+    for from_sha, to_sha in rebases:
+        if from_sha == current:
+            current = to_sha
+            heads.add(to_sha)
+    return frozenset(heads)
 
 
 def _current_reviews(state: JobState) -> dict[str, Any]:
@@ -35,9 +79,10 @@ def route_after_verify(state: JobState) -> str | list[Send]:
     status = state.get("verify_status")
     if status in (VerifyStatus.PASSED.value, VerifyStatus.SKIPPED.value):
         rnd, job_id = state.get("round", 1), state.get("job_id", "")
+        kinds = _review_kinds(state)
         return [
-            Send("review", ReviewTask(job_id=job_id, round=rnd, kind=k))
-            for k in _review_kinds(state)
+            Send("review", ReviewTask(job_id=job_id, round=rnd, kind=k, fan_out=len(kinds)))
+            for k in kinds
         ]
     if status == VerifyStatus.FAILED.value and state.get("fix_attempts", 0) < state.get(
         "max_fix_attempts", 1
@@ -130,7 +175,10 @@ def transition(state: JobState, source: str, target: str) -> dict[str, Any]:
         if source == "after_reviews":
             return {"gate_reason": REASON_REVIEWER_FAILED, "retry_node": "verify"}
         if source == "verify":
-            return {"gate_reason": REASON_CHECKS_FAILED, "retry_node": "verify"}
+            reason = verify_gate_reason(
+                state.get("verify_status", VerifyStatus.FAILED.value), state.get("verify_reason")
+            )
+            return {"gate_reason": reason, "retry_node": "verify"}
         if source == "approve":
             approved = state.get("decision") == Decision.APPROVE.value
             if approved and state.get("diff_cut"):
@@ -165,7 +213,17 @@ def gate_artifacts(state: JobState) -> list[str]:
     paths = {o["artifact"] for o in _current_reviews(state).values() if o.get("artifact")}
     if reason == REASON_REVIEWER_FAILED:
         return sorted(paths)
-    if reason == REASON_CHECKS_FAILED:
+    if reason and (
+        reason.startswith(REASON_CHECKS_FAILED)
+        or reason
+        in (
+            REASON_REBASE_CONFLICT,
+            REASON_TEST_COMMAND_CHANGED,
+            REASON_HEAD_NOT_ON_BRANCH,
+            REASON_NOT_ON_BASE,
+            REASON_SETUP_FAILED,
+        )
+    ):
         return ["verify.md"]
     if reason == REASON_APPROVER_ESCALATED:
         return ["decision.md", *sorted(paths)]

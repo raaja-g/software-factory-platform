@@ -12,14 +12,16 @@ from typing import Any
 from tests.fakes.artifacts import InMemoryArtifactStore
 
 from swfactory.artifacts import ArtifactStore
+from swfactory.costs.budgets import BudgetService
 from swfactory.definition.loader import init_definition_repo, load_definition
 from swfactory.definition.models import AppDef, Concurrency, Defaults, TriageConfig
 from swfactory.definition.store import DefinitionStore
-from swfactory.engines.fake import FakeEngine, FakeScript
+from swfactory.engines.fake import FakeEngine, FakeRunGateway, FakeScript, FakeSelector
 from swfactory.engines.registry import register_engine
 from swfactory.events import EventBus
 from swfactory.gitops.fake import FakeGitService
 from swfactory.graph.deps import Deps, unavailable
+from swfactory.models.catalog import Catalog
 from swfactory.models.triage import TriageService
 from swfactory.roles.library import RoleLibrary
 from swfactory.sandbox.base import ExecResult
@@ -74,7 +76,10 @@ def make_test_deps(
     *,
     exec_results: Sequence[ExecResult] = (),
     git: FakeGitService | None = None,
+    selector: Any = None,
+    gateway: Any = None,
 ) -> Deps:
+    """Deps with a fake engine; ``selector`` and ``gateway`` default to the fake-engine ones."""
     register_engine(FakeEngine(script))
     artifacts = ArtifactStore(sessions, Path(tempfile.mkdtemp(prefix="artifacts-")))
     definitions = DefinitionStore(sessions)
@@ -83,10 +88,10 @@ def make_test_deps(
         events=EventBus(sessions, ""),
         artifacts=artifacts,
         sandboxes=FakeSandboxProvider(exec_results),  # pyright: ignore[reportArgumentType]
-        selector=unavailable("selector", "M5"),
-        catalog=unavailable("catalog", "M5"),
-        gateway=unavailable("gateway", "M5"),
-        budgets=unavailable("budgets", "M5"),
+        selector=selector if selector is not None else FakeSelector(sessions),
+        catalog=Catalog(sessions, None, definitions),
+        gateway=gateway if gateway is not None else FakeRunGateway(),
+        budgets=BudgetService(sessions, definitions),
         git=git or FakeGitService(),
         roles=RoleLibrary(),
         triage=TriageService(definitions, artifacts),

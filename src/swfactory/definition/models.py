@@ -74,6 +74,25 @@ class Defaults(StrictModel):
     definition_poll_s: int = 300
     router_timeout_s: int = 2
     judge_sampling: float = Field(default=0.10, ge=0, le=1)
+    waiting_expiry_days: int = Field(default=14, ge=0, le=365)  # 0 disables
+    max_turns: dict[str, int] = Field(default_factory=lambda: {"builder": 80, "default": 40})
+    # Claude Code's safety-classifier fallbacks (section 9.3): model aliases every claude_code
+    # run key also allows
+    claude_classifier_fallbacks: tuple[str, ...] = ()
+
+    @field_validator("max_turns")
+    @classmethod
+    def _max_turns(cls, v: dict[str, int]) -> dict[str, int]:
+        if "default" not in v:
+            raise ValueError("max_turns needs a 'default' entry")
+        if any(n < 1 for n in v.values()):
+            raise ValueError("max_turns values must be at least 1")
+        return v
+
+
+def max_turns_for(defaults: Defaults, role: str) -> int:
+    """Turn limit of a role: its own entry, else the ``default`` entry."""
+    return defaults.max_turns.get(str(role), defaults.max_turns["default"])
 
 
 class Budgets(StrictModel):
@@ -236,6 +255,33 @@ def _check_local_path(v: str) -> str:
     return v
 
 
+_SHOT_NAME = re.compile(r"^[a-z0-9-]+$")
+
+
+class SmokeConfig(StrictModel):
+    """Browser smoke test: the app is always reached at http://127.0.0.1:<port> in the gate box."""
+
+    start_command: str
+    port: int = Field(ge=1, le=65535)
+    paths: list[str]
+    screenshots: list[str]
+    ready_timeout_s: int = Field(default=60, ge=1)
+
+    @model_validator(mode="after")
+    def _check(self) -> "SmokeConfig":
+        if not self.paths or len(self.paths) != len(self.screenshots):
+            raise ValueError("paths and screenshots must be non-empty and the same length")
+        if len(set(self.screenshots)) != len(self.screenshots):
+            raise ValueError("screenshot names must be unique")
+        for n in self.screenshots:
+            if not _SHOT_NAME.fullmatch(n):
+                raise ValueError(f"screenshot name {n!r} must match ^[a-z0-9-]+$")
+        for p in self.paths:
+            if not p.startswith("/"):
+                raise ValueError(f"smoke path {p!r} must start with '/'")
+        return self
+
+
 class AppDef(StrictModel):
     repo_kind: Literal["github", "local"]
     repo_url: str
@@ -269,9 +315,12 @@ class AppDef(StrictModel):
     max_fix_attempts: int | None = None
     budget_usd: Decimal | None = None
     concurrency: int | None = None
+    smoke: SmokeConfig | None = None
 
     @model_validator(mode="after")
     def _check(self) -> "AppDef":
+        if self.smoke is not None and self.runner != "web":
+            raise ValueError("smoke requires runner web")
         if self.local_path is not None:
             if self.repo_kind != "local":
                 raise ValueError("local_path needs repo_kind local")
@@ -404,6 +453,7 @@ class RunnerDef(StrictModel):
     pids: int = 512
     allowed_hosts: tuple[str, ...] = ()
     setup_commands: tuple[str, ...] = ()
+    max_work_gb: int = Field(20, ge=1, le=1000)
 
 
 class AutomationTrigger(StrictModel):
@@ -594,6 +644,8 @@ def check_references(defn: Definition, policy: DefinitionPolicy) -> tuple[Defini
             ref(("profiles", pname), f"profile name '{pname}' must match {PROFILE_NAME_RE.pattern}")
 
     check_profile(("factory", "defaults", "profile"), f.defaults.profile)
+    for i, alias in enumerate(f.defaults.claude_classifier_fallbacks):
+        check_model(("factory", "defaults", "claude_classifier_fallbacks", i), alias)
 
     for pname, prov in f.providers.items():
         if prov.base_url is not None:
@@ -740,4 +792,5 @@ def runner_spec(defn: Definition, name: str) -> RunnerSpec:
         memory_mb=r.memory_mb,
         pids=r.pids,
         allowed_hosts=tuple(r.allowed_hosts),
+        max_work_gb=r.max_work_gb,
     )

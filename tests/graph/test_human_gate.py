@@ -40,6 +40,9 @@ async def resume_job(script, payload, *, rerun_gate=False, new_head=None):
     g, cfg, job, _ = await _start(script)
     if new_head is not None:
         ctx.deps.sandboxes.boxes[job.id].head = new_head
+        verified = ctx.deps.sandboxes.verified.get(job.id)  # reviewers run on the verified tree
+        if verified is not None:
+            verified.head = new_head
     if rerun_gate:
         hist = [s async for s in g.aget_state_history(cfg)]
         at_gate = next(s for s in hist if s.next == ("human_gate",))

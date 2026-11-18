@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, insert, select, text, update
+from sqlalchemy import and_, case, func, insert, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +27,7 @@ from swfactory.db.tables import (
 from swfactory.domain.types import (
     DEFAULT_REVIEWERS,
     TERMINAL_STAGES,
+    CostSource,
     HumanAction,
     RunStatus,
     Stage,
@@ -93,8 +94,15 @@ async def start_agent_run(
     model_alias: str | None,
     head_sha: str | None = None,
     meta: Mapping[str, Any] = {},  # noqa: B006
+    runner_digest: str | None = None,
+    run_id: UUID | None = None,
+    status: str = RunStatus.RUNNING.value,
+    decision_id: UUID | None = None,
 ) -> tuple[UUID, int]:
-    """Insert a running row as the next attempt of (job, role, round) and emit run.started."""
+    """Insert a row as the next attempt of (job, role, round) and emit run.started.
+
+    Runs in the caller's session (no commit). ``run_id`` is the id allocated before the budget
+    reservation and the gateway key; ``decision_id`` links the model decision both ways."""
     last = await s.scalar(
         select(func.max(AgentRun.attempt)).where(
             AgentRun.job_id == job_id, AgentRun.role == str(role), AgentRun.round == round
@@ -109,11 +117,21 @@ async def start_agent_run(
         head_sha=head_sha,
         engine=engine,
         model_alias=model_alias,
-        status=RunStatus.RUNNING.value,
+        status=str(status),
         meta=dict(meta),
+        runner_digest=runner_digest,
+        decision_id=decision_id,
     )
+    if run_id is not None:
+        row.id = run_id
     s.add(row)
     await s.flush()
+    if decision_id is not None:
+        await s.execute(
+            update(ModelDecision)
+            .where(ModelDecision.id == decision_id, ModelDecision.run_id.is_(None))
+            .values(run_id=row.id)
+        )
     await record_event(
         s,
         job_id,
@@ -179,6 +197,73 @@ async def finish_agent_run(
         },
     )
     return True
+
+
+async def lock_job(s: AsyncSession, job_id: UUID) -> None:
+    """Take the job row's lock: do it before locking any of its runs (the cancel's order)."""
+    await s.execute(select(Job.id).where(Job.id == job_id).with_for_update())
+
+
+async def record_run_cost(
+    s: AsyncSession, run_id: UUID, cost_usd: Decimal, source: CostSource
+) -> bool:
+    """Set the run's cost where it is still null, add it to the job's and emit cost.updated.
+
+    True when it did; a second call for the same run changes nothing. The job row is locked
+    before the run row, the order a cancel uses, so the two cannot deadlock."""
+    job_id = await s.scalar(select(AgentRun.job_id).where(AgentRun.id == run_id))
+    if job_id is None:
+        return False
+    await lock_job(s, job_id)
+    res = await s.execute(
+        update(AgentRun)
+        .where(AgentRun.id == run_id, AgentRun.cost_usd.is_(None))
+        .values(cost_usd=cost_usd, cost_source=source.value)
+        .returning(AgentRun.job_id, AgentRun.role)
+    )
+    found = res.first()
+    if found is None:
+        return False
+    total = await s.scalar(
+        update(Job)
+        .where(Job.id == found.job_id)
+        .values(cost_usd=Job.cost_usd + cost_usd)
+        .returning(Job.cost_usd)
+    )
+    await record_event(
+        s,
+        found.job_id,
+        "cost.updated",
+        {
+            "run_id": run_id,
+            "role": found.role,
+            "usd": cost_usd,
+            "source": source.value,
+            "job_cost_usd": total,
+        },
+    )
+    return True
+
+
+async def latest_reviewer_verdicts(
+    s: AsyncSession, job_id: UUID, *, before_round: int
+) -> dict[str, str]:
+    """Reviewer kind -> latest verdict of the rounds before ``before_round``."""
+    rows = await s.execute(
+        select(AgentRun.role, AgentRun.verdict)
+        .where(
+            AgentRun.job_id == job_id,
+            AgentRun.role.like("reviewer-%"),
+            AgentRun.round < before_round,
+            AgentRun.verdict.is_not(None),
+        )
+        .order_by(AgentRun.round, AgentRun.attempt)
+    )
+    return {
+        role.removeprefix("reviewer-"): verdict
+        for role, verdict in rows.all()
+        if verdict is not None
+    }
 
 
 async def ok_runs(s: AsyncSession, job_id: UUID, role: str, round: int) -> list[AgentRunRow]:
@@ -815,3 +900,51 @@ async def open_reservations(
     if exclude_kind is not None:
         q = q.join(Job, Job.id == BudgetReservation.job_id).where(Job.kind != exclude_kind)
     return Decimal(await s.scalar(q) or 0)
+
+
+_ENDED_STAGES = (Stage.CANCELLED.value, Stage.CLOSED.value, Stage.MERGED.value, Stage.FAILED.value)
+
+
+def _run_ended():
+    """True for a run that is not running, or is running in a job that no step will clean up."""
+    return or_(AgentRun.status != RunStatus.RUNNING.value, Job.stage.in_(_ENDED_STAGES))
+
+
+async def runs_missing_cost(s: AsyncSession, *, ended_before: datetime, limit: int) -> list[UUID]:
+    """Runs with no cost whose end (or, for a running row of an ended job, the job's end)
+    is before ``ended_before``, oldest first."""
+    running_orphan = and_(AgentRun.status == RunStatus.RUNNING.value, Job.stage.in_(_ENDED_STAGES))
+    ended_at = case(
+        (
+            running_orphan,
+            func.coalesce(Job.finished_at, Job.updated_at),
+        ),
+        else_=func.coalesce(AgentRun.finished_at, AgentRun.started_at),
+    )
+    q = (
+        select(AgentRun.id)
+        .join(Job, Job.id == AgentRun.job_id)
+        .where(AgentRun.cost_usd.is_(None), _run_ended(), ended_at < ended_before)
+        .order_by(ended_at, AgentRun.id)
+        .limit(limit)
+    )
+    return list((await s.scalars(q)).all())
+
+
+async def stale_reservations(
+    s: AsyncSession, *, created_before: datetime, limit: int
+) -> list[UUID]:
+    """Run ids of open reservations older than ``created_before`` whose run has ended."""
+    q = (
+        select(BudgetReservation.run_id)
+        .join(AgentRun, AgentRun.id == BudgetReservation.run_id)
+        .join(Job, Job.id == AgentRun.job_id)
+        .where(
+            BudgetReservation.released_at.is_(None),
+            BudgetReservation.created_at < created_before,
+            _run_ended(),
+        )
+        .order_by(BudgetReservation.created_at, BudgetReservation.run_id)
+        .limit(limit)
+    )
+    return list((await s.scalars(q)).all())

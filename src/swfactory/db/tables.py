@@ -233,7 +233,7 @@ class AgentRun(Base):
     input_tokens: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     output_tokens: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     cache_read_tokens: Mapped[int] = mapped_column(Integer, server_default=text("0"))
-    cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), server_default=text("0"))
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))  # null until known
     cost_source: Mapped[str | None] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text)
     meta: Mapped[Any] = _jsonb("{}", nullable=False)

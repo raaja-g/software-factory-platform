@@ -104,6 +104,12 @@ def test_defaults_validate():
             "unknown profile 'nope'",
         ),
         (
+            ("factory", "defaults", "claude_classifier_fallbacks"),
+            ["ghost@vertex"],
+            ("factory", "defaults", "claude_classifier_fallbacks", 0),
+            "unknown model alias 'ghost@vertex'",
+        ),
+        (
             ("factory", "apps", "demo", "registries"),
             ["nope"],
             ("factory", "apps", "demo", "registries", 0),

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -24,10 +24,21 @@ class ExecResult:
 READ_BYTES_MAX = 512 * 2**20
 
 
-class SandboxFileTooLarge(Exception): ...
+class SandboxFileTooLarge(Exception):
+    def __init__(self, path: str, size: int) -> None:
+        super().__init__(f"{path} is {size} bytes, over the {READ_BYTES_MAX} byte read limit")
+        self.path = path
+        self.size = size
 
 
 class WorkspaceOverLimit(Exception): ...
+
+
+class TransferTooLarge(Exception):
+    def __init__(self, max_bytes: int) -> None:
+        super().__init__(
+            f"repository bundle over {max_bytes // 2**20} MB; raise FACTORY_MAX_BUNDLE_MB"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +78,15 @@ class Sandbox(Protocol):
     async def restart(self) -> None: ...
 
 
+@asynccontextmanager
+async def running(box: Sandbox) -> AsyncIterator[Sandbox]:
+    await box.start()
+    try:
+        yield box
+    finally:
+        await box.stop()
+
+
 class SandboxProvider(Protocol):
     async def ensure(self, job_id: UUID, runner: RunnerSpec) -> Sandbox: ...
     def verify_box(
@@ -78,4 +98,5 @@ class SandboxProvider(Protocol):
     async def destroy(self, job_id: UUID) -> None: ...
     async def reap_orphans(self, live: set[UUID], active: set[UUID]) -> int: ...
     async def check_workspaces(self) -> list[UUID]: ...
+    def mark_over_limit(self, job_id: UUID, max_work_gb: int) -> None: ...
     async def stop_all(self) -> int: ...
