@@ -1,0 +1,2 @@
+turns:
+  - {role: reviewer-ux, round: 1, attempt: 1, raise: "reviewer crashed"}

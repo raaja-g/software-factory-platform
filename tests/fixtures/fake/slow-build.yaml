@@ -1,0 +1,2 @@
+turns:
+  - {role: builder, round: 1, attempt: 1, latency_s: 20}

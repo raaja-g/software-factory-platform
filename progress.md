@@ -4,7 +4,7 @@ Updated after every completed step.
 
 ## Now
 
-M1 is done; starting M2 (the job loop with fake engines). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
+M2 is done; starting M3 (roles, contracts, triage, requirements agent). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
 
 ## Plan revision (before coding)
 
@@ -32,6 +32,24 @@ M1 is done; starting M2 (the job loop with fake engines). M0's spikes wait for y
 - [x] **2026-11-18** M1.8b Backlogs
 - [x] **2026-11-18** M1 exit check run end to end: 126 default tests, 59 database tests, ruff and pyright clean.
 
+## M2 The job loop (done)
+
+- [x] **2026-11-18** M2.1 Graph state and pure routing
+- [x] **2026-11-18** M2.2a Engine protocol, registry and fake engine
+- [x] **2026-11-18** M2.2b Sandbox protocols, fake sandbox and fake git
+- [x] **2026-11-18** M2.3 Checkpointer on PostgreSQL 18
+- [x] **2026-11-18** M2.4 Idempotent agent step and a minimal artifact store
+- [x] **2026-11-18** M2.5a Nodes, `build_job_graph`, happy path and rounds
+- [x] **2026-11-18** M2.5b Verify node and fix attempts
+- [x] **2026-11-18** M2.5c Human gate and error handlers
+- [x] **2026-11-18** M2.6 Commands and the jobs CLI
+- [x] **2026-11-18** M2.7a Worker loop, leases and global concurrency
+- [x] **2026-11-18** M2.7b Commands and cancel in the worker
+- [x] **2026-11-18** M2.7c Crash and resume at every node
+- [x] **2026-11-18** M2.7d Poison jobs, retry of failed jobs and graceful shutdown
+- [x] **2026-11-18** M2.8 Board query
+- [x] **2026-11-18** M2 exit check: 212 default tests, 166 database tests, ruff and pyright clean. Widened one timing-sensitive lease test that failed once under load.
+
 ## Milestones
 
 Order for now: everything runs on your Mac. M0, then M1 to M8, then M10, M11 and M12. M9 (the GCP team instance) and the team-only parts of M13 wait until you ask for them. The private package mirror moves earlier, because your first apps need private packages.
@@ -40,7 +58,7 @@ Order for now: everything runs on your Mac. M0, then M1 to M8, then M10, M11 and
 |---|---|
 | M0 Spikes | not started |
 | M1 Foundation | done |
-| M2 Loop with fakes | not started |
+| M2 Loop with fakes | done |
 | M3 Roles, contracts, triage | not started |
 | M4 Sandboxes, verify gate, local git | not started |
 | M5 Gateway, models, cost | not started |

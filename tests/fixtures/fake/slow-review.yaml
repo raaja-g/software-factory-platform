@@ -1,0 +1,2 @@
+turns:
+  - {role: reviewer-security, round: 1, attempt: 1, latency_s: 20}

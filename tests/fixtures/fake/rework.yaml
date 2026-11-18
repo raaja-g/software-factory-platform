@@ -1,0 +1,2 @@
+turns:
+  - {role: reviewer-security, round: 1, output: "VERDICT: CHANGES\nfix the finding"}

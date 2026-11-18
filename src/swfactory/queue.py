@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Collection
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
@@ -20,7 +21,9 @@ _ACTIVE = sorted(st.value for st in ACTIVE_STAGES)
 _NORMAL_KINDS = "('normal', 'requirements')"
 _CLAIMABLE = (
     "(stage = 'queued' OR stage = ANY(CAST(:active_stages AS text[]))) "
-    "AND (lease_until IS NULL OR lease_until < now())"
+    "AND (lease_until IS NULL OR lease_until < now()) "
+    "AND (retry_after IS NULL OR retry_after <= now()) "
+    "AND id <> ALL(CAST(CAST(:exclude AS text[]) AS uuid[]))"
 )
 
 
@@ -112,7 +115,7 @@ async def enqueue_job(
     return job
 
 
-async def _candidates(s: AsyncSession) -> list[tuple[str, str | None]]:
+async def _candidates(s: AsyncSession, exclude: list[str]) -> list[tuple[str, str | None]]:
     """(job id, app id or None for a benchmark) oldest first."""
     found = await load_active(s)
     if found is None:
@@ -125,7 +128,7 @@ async def _candidates(s: AsyncSession) -> list[tuple[str, str | None]]:
         if slug in defn.factory.apps
     }
     out: list[tuple[datetime, str, str | None]] = []
-    params = {"limits": json.dumps(limits), "active_stages": _ACTIVE}
+    params = {"limits": json.dumps(limits), "active_stages": _ACTIVE, "exclude": exclude}
     rows = (
         await s.execute(
             text(
@@ -136,6 +139,8 @@ async def _candidates(s: AsyncSession) -> list[tuple[str, str | None]]:
                  WHERE j.kind IN {_NORMAL_KINDS} AND app.backlog_turn(j)
                    AND (j.stage = 'queued' OR j.stage = ANY(CAST(:active_stages AS text[])))
                    AND (j.lease_until IS NULL OR j.lease_until < now())
+                   AND (j.retry_after IS NULL OR j.retry_after <= now())
+                   AND j.id <> ALL(CAST(CAST(:exclude AS text[]) AS uuid[]))
                    AND (SELECT count(*) FROM app.jobs r WHERE r.app_id = j.app_id
                           AND r.kind IN {_NORMAL_KINDS}
                           AND r.lease_owner IS NOT NULL AND r.lease_until > now()) < l.lim::int
@@ -153,7 +158,7 @@ async def _candidates(s: AsyncSession) -> list[tuple[str, str | None]]:
                 f"SELECT id, created_at FROM app.jobs WHERE kind = 'benchmark' AND {_CLAIMABLE} "
                 "ORDER BY created_at, id LIMIT 1"
             ),
-            {"active_stages": _ACTIVE},
+            {"active_stages": _ACTIVE, "exclude": exclude},
         )
     ).first()
     if bench is not None:
@@ -163,16 +168,26 @@ async def _candidates(s: AsyncSession) -> list[tuple[str, str | None]]:
 
 
 _UPDATE = """
-UPDATE app.jobs SET lease_owner = :worker_id, lease_until = now() + make_interval(secs => :lease_s),
+UPDATE app.jobs SET lease_owner = :worker_id,
+       lease_until = now() + make_interval(secs => :lease_s), lease_epoch = lease_epoch + 1,
+       crash_count = crash_count + CASE WHEN lease_owner IS NOT NULL THEN 1 ELSE 0 END,
+       retry_after = CASE WHEN lease_owner IS NOT NULL
+                          THEN now() + make_interval(secs => 60 * power(2, crash_count))
+                          ELSE retry_after END,
        started_at = coalesce(started_at, now()), updated_at = now() WHERE id = :id RETURNING *
 """
 
 
 async def _try_claim(
-    s: AsyncSession, job_id: str, app_id: str | None, worker_id: str, lease_s: int
+    s: AsyncSession,
+    job_id: str,
+    app_id: str | None,
+    worker_id: str,
+    lease_s: int,
+    exclude: list[str],
 ) -> Job | None:
     async with s.begin():
-        params = {"active_stages": _ACTIVE}
+        params = {"active_stages": _ACTIVE, "exclude": exclude}
         if app_id is None:
             row = await s.scalar(
                 text(
@@ -227,35 +242,44 @@ async def _try_claim(
         ).scalar_one()
 
 
-async def claim_next_job(s: AsyncSession, *, worker_id: str, lease_s: int) -> Job | None:
-    """Claim the oldest claimable job of an app under its limit; needs no open transaction."""
+async def claim_next_job(
+    s: AsyncSession, *, worker_id: str, lease_s: int, exclude: Collection[UUID] = ()
+) -> Job | None:
+    """Claim the oldest claimable job of an app under its limit; needs no open transaction.
+
+    Every claim bumps ``lease_epoch``. Jobs in ``exclude`` (the ones the caller is already
+    driving) are never returned.
+    """
+    skip = sorted(str(j) for j in exclude)
     async with s.begin():
-        cands = await _candidates(s)
+        cands = await _candidates(s, skip)
     for job_id, app_id in cands:
-        job = await _try_claim(s, job_id, app_id, worker_id, lease_s)
+        job = await _try_claim(s, job_id, app_id, worker_id, lease_s, skip)
         if job is not None:
             return job
     return None
 
 
-async def renew_lease(s: AsyncSession, *, job_id: UUID, worker_id: str, lease_s: int) -> bool:
+async def renew_lease(
+    s: AsyncSession, *, job_id: UUID, worker_id: str, lease_epoch: int, lease_s: int
+) -> bool:
     async with s.begin():
         res = await s.execute(
             text(
                 "UPDATE app.jobs SET lease_until = now() + make_interval(secs => :lease_s) "
-                "WHERE id = :id AND lease_owner = :w RETURNING id"
+                "WHERE id = :id AND lease_owner = :w AND lease_epoch = :e RETURNING id"
             ),
-            {"lease_s": lease_s, "id": job_id, "w": worker_id},
+            {"lease_s": lease_s, "id": job_id, "w": worker_id, "e": lease_epoch},
         )
         return res.first() is not None
 
 
-async def release_job(s: AsyncSession, *, job_id: UUID, worker_id: str) -> None:
+async def release_job(s: AsyncSession, *, job_id: UUID, worker_id: str, lease_epoch: int) -> None:
     async with s.begin():
         await s.execute(
             text(
                 "UPDATE app.jobs SET lease_owner = NULL, lease_until = NULL "
-                "WHERE id = :id AND lease_owner = :w"
+                "WHERE id = :id AND lease_owner = :w AND lease_epoch = :e"
             ),
-            {"id": job_id, "w": worker_id},
+            {"id": job_id, "w": worker_id, "e": lease_epoch},
         )

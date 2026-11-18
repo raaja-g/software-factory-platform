@@ -13,4 +13,4 @@ def test_db_upgrade_prints_revision(pg_url, monkeypatch):
     get_settings.cache_clear()
     r = CliRunner().invoke(app, ["db", "upgrade"])
     assert r.exit_code == 0, r.output
-    assert r.stdout.strip() == "database at revision 0001_initial"
+    assert r.stdout.strip() == "database at revision 0004_job_crashes"

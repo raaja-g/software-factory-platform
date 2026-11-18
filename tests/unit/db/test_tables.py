@@ -27,7 +27,7 @@ M1_TABLES = {
 def test_m1_section_15_tables():  # "<=": later milestones add tables
     ts = Base.metadata.sorted_tables
     assert M1_TABLES <= {t.name for t in ts} and {t.schema for t in ts} == {"app"}
-    assert "lease_epoch" not in Base.metadata.tables["app.jobs"].c  # M2.7a adds it in 0002
+    assert "lease_epoch" in Base.metadata.tables["app.jobs"].c  # added by migration 0002
 
 
 def test_ids_default_uuidv7():

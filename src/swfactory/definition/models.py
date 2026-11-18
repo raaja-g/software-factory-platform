@@ -66,6 +66,7 @@ class Defaults(StrictModel):
     engine_retries: int = 2
     engine_retry_backoff_s: tuple[int, int] = (10, 60)
     contract_repair_attempts: int = 1
+    max_job_crashes: int = Field(default=3, ge=1)
     lease_s: int = 90
     lease_renew_s: int = 30
     definition_poll_s: int = 300

@@ -513,6 +513,12 @@
           "title": "Max Fix Attempts",
           "type": "integer"
         },
+        "max_job_crashes": {
+          "default": 3,
+          "minimum": 1,
+          "title": "Max Job Crashes",
+          "type": "integer"
+        },
         "max_rounds": {
           "default": 2,
           "title": "Max Rounds",
@@ -1320,6 +1326,7 @@
         "lease_s": 90,
         "max_backlog_items": 30,
         "max_fix_attempts": 1,
+        "max_job_crashes": 3,
         "max_rounds": 2,
         "profile": "team-gemini",
         "router_timeout_s": 2,

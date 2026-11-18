@@ -2,9 +2,9 @@
 
 A platform that turns a requirement into reviewed, merged code. For each feature it runs spec, build, verify, four independent reviews, approve and deliver, using coding agents on any model provider. It runs on your machine in Docker, many apps and features at a time.
 
-**Status: under construction.** Milestone M1 (foundation) is done. See [progress.md](progress.md) for the step-by-step status.
+**Status: under construction.** Milestones M1 (foundation) and M2 (the job loop) are done. See [progress.md](progress.md) for the step-by-step status.
 
-## What works now (M1)
+## What works now (M1 and M2)
 
 - A Python package, `swfactory`, with a `factory` command line.
 - Settings from the environment, and logs that redact secrets.
@@ -15,7 +15,13 @@ A platform that turns a requirement into reviewed, merged code. For each feature
 - `factory def sync` loads a definition and registers its apps (`factory apps list`).
 - A per-app job queue with leases (`factory jobs create`, `factory jobs list`) and backlogs: ordered lists of jobs where each starts only after the one before it has merged.
 
-Nothing runs agents yet. That starts in the next milestones.
+- **The job loop (M2),** on PostgreSQL with scripted fake agents, a fake sandbox and fake git. A job goes through every stage: triage, spec, build, verify, four parallel reviews, approve, deliver. It does rounds and rework when reviewers ask for changes, and handles one reviewer failing.
+  - It is durable: the graph is checkpointed in Postgres, so a worker can be killed at any node and a job resumes without repeating finished steps.
+  - People decide at a gate: `factory jobs approve|rework|reject|retry|cancel`. Each action is tied to the wait it answers, and an approval is pinned to the commit the person saw.
+  - A worker claims jobs with leases, runs up to a set number at once, backs off and finally fails a job that keeps crashing it, and shuts down cleanly.
+  - `factory jobs board` prints the board as JSON.
+
+No real agents run yet: M3 onward adds roles, sandboxes and the model gateway.
 
 ## Set up and run
 
@@ -32,8 +38,12 @@ uv run factory def validate ~/factory-definition
 uv run factory db upgrade
 uv run factory def sync ~/factory-definition
 uv run factory apps list
-uv run factory jobs create demo "Add a /health endpoint"
+uv run factory jobs create --app demo --title "Say hello" "Add a hello command"
 uv run factory jobs list
+
+# run the whole loop with a scripted fake agent (a reviewer asks for changes, then passes)
+uv run factory worker --fake-script tests/fixtures/fake/rework.yaml --exit-when-idle
+uv run factory jobs board --app demo
 ```
 
 Run the tests:
@@ -46,4 +56,4 @@ uv run pytest -m db                             # needs the Postgres container
 
 ## Next
 
-Roles and output contracts, sandboxes and the verify gate, the model gateway and cost limits, and the coding-agent adapters.
+M3: role files, output contracts, fencing of untrusted text, triage, and the requirements agent. Then sandboxes and the verify gate (M4), the model gateway and cost limits (M5), and the coding-agent adapters (M6).

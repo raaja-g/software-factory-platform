@@ -163,7 +163,9 @@ async def test_per_app_limit_of_one(sessions):
     got = [g for g in await asyncio.gather(claim(sessions, "w1"), claim(sessions, "w2")) if g]
     assert len(got) == 1 and await claim(sessions, "w3") is None
     async with sessions() as s:
-        await release_job(s, job_id=got[0].id, worker_id=got[0].lease_owner)
+        await release_job(
+            s, job_id=got[0].id, worker_id=got[0].lease_owner, lease_epoch=got[0].lease_epoch
+        )
     nxt = await claim(sessions, "w4")
     assert nxt is not None and nxt.app_id == got[0].app_id
 
@@ -240,9 +242,15 @@ async def test_lease_renew_and_expiry(sessions):
     await enq(sessions, app="a")
     j = await claim(sessions, "w1", lease_s=1)
     async with sessions() as s:
-        assert await renew_lease(s, job_id=j.id, worker_id="w1", lease_s=1) is True
+        assert (
+            await renew_lease(s, job_id=j.id, worker_id="w1", lease_epoch=j.lease_epoch, lease_s=1)
+            is True
+        )
     async with sessions() as s:
-        assert await renew_lease(s, job_id=j.id, worker_id="w2", lease_s=1) is False
+        assert (
+            await renew_lease(s, job_id=j.id, worker_id="w2", lease_epoch=j.lease_epoch, lease_s=1)
+            is False
+        )
     assert await claim(sessions, "w2") is None
     await asyncio.sleep(1.5)
     again = await claim(sessions, "w2")

@@ -1,6 +1,8 @@
 """The ``factory`` command line."""
 
 import asyncio
+import os
+import signal
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
@@ -110,7 +112,13 @@ def db_upgrade():
     from swfactory.db.migrate import upgrade_database
 
     settings = get_settings()
-    rev = upgrade_database(settings.sqlalchemy_url())
+    import asyncio
+
+    from swfactory.db.engine import setup_checkpointer
+
+    url = settings.sqlalchemy_url()
+    rev = upgrade_database(url)
+    asyncio.run(setup_checkpointer(url))
     typer.echo(f"database at revision {rev}")
 
 
@@ -172,7 +180,6 @@ def jobs_create(
 ):
     """Queue a feature job."""
     import getpass
-    import os
 
     from swfactory.definition.store import NoActiveDefinition
     from swfactory.queue import UnknownApp, enqueue_job
@@ -247,3 +254,146 @@ def jobs_list(
 
     for line in asyncio.run(run()):
         typer.echo(line)
+
+
+@jobs_app.command("board")
+def jobs_board(
+    app_slug: Annotated[str | None, typer.Option("--app", help="Filter by app")] = None,
+):
+    """Print the board as JSON."""
+    import json
+
+    from swfactory.db.repo import board
+
+    settings = get_settings()
+
+    async def run() -> dict:
+        engine = make_engine(settings.sqlalchemy_url())
+        try:
+            async with make_sessionmaker(engine)() as s:
+                return await board(s, app_slug=app_slug)
+        finally:
+            await engine.dispose()
+
+    typer.echo(json.dumps(asyncio.run(run()), indent=2))
+
+
+def _send_command(action: str, job_ref: str, note: str | None, by: str | None) -> None:
+    import getpass
+
+    from swfactory.commands import GATE_ACTIONS, CommandRefused, check_command_allowed
+    from swfactory.db.repo import (
+        JobRefError,
+        insert_command,
+        latest_waiting,
+        pending_gate_command,
+        resolve_job_ref,
+    )
+    from swfactory.domain.types import HumanAction, Stage
+
+    settings = get_settings()
+    who = by or f"cli:{os.environ.get('USER') or getpass.getuser()}"
+
+    async def run() -> str:
+        engine = make_engine(settings.sqlalchemy_url())
+        try:
+            async with make_sessionmaker(engine).begin() as s:
+                job = await resolve_job_ref(s, job_ref)
+                act = HumanAction(action)
+                check_command_allowed(act, Stage(job.stage), note)
+                wait_id: int | None = None
+                if (
+                    act in GATE_ACTIONS and job.stage == Stage.NEEDS_HUMAN.value
+                ):  # answers the current wait
+                    await s.get(type(job), job.id, with_for_update=True, populate_existing=True)
+                    waiting = await latest_waiting(s, job.id)
+                    if waiting is not None:
+                        wait_id = waiting[0]
+                        if await pending_gate_command(s, job.id, wait_id) is not None:
+                            raise CommandRefused("an action is already pending for this wait")
+                await insert_command(
+                    s,
+                    job_id=job.id,
+                    action=action,
+                    note=note,
+                    requested_by=who,
+                    gate_event_id=wait_id,
+                )
+            return f"{action} sent to {job_ref}"
+        finally:
+            await engine.dispose()
+
+    try:
+        typer.echo(asyncio.run(run()))
+    except (CommandRefused, JobRefError) as e:
+        typer.echo(str(e))
+        raise typer.Exit(1) from None
+
+
+def _register_job_action(action: str) -> None:
+    def cmd(
+        job: Annotated[str, typer.Argument(help="Job uuid or <app>:<seq>")],
+        note: Annotated[str | None, typer.Option(help="Note for the job")] = None,
+        by: Annotated[str | None, typer.Option(help="Who is acting")] = None,
+    ):
+        _send_command(action, job, note, by)
+
+    cmd.__doc__ = f"Send '{action}' to a job."
+    jobs_app.command(action)(cmd)
+
+
+for _action in ("approve", "rework", "reject", "retry", "cancel"):
+    _register_job_action(_action)
+
+
+@app.command("worker")
+def worker(
+    fake_script: Annotated[Path | None, typer.Option(help="Scripted fake engine (YAML)")] = None,
+    max_jobs: Annotated[
+        int | None, typer.Option(help="Jobs run at once (default: definition)")
+    ] = None,
+    fake_git_state: Annotated[
+        Path | None, typer.Option(help="Fake git state file (tests)", hidden=True)
+    ] = None,
+    lease_s: Annotated[int, typer.Option(help="Job lease in seconds")] = 90,
+    renew_s: Annotated[float, typer.Option(help="Lease renewal interval in seconds")] = 30,
+    exit_when_idle: Annotated[bool, typer.Option(help="Exit when no job is left")] = False,
+):
+    """Run jobs from the queue."""
+    from swfactory.worker import run_worker
+
+    if fake_script is None:
+        typer.echo("no engines yet: pass --fake-script (real engines arrive in M6)")
+        raise typer.Exit(2)
+    settings = get_settings()
+
+    async def main() -> None:
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        def on_signal() -> None:
+            if stop.is_set():  # a second signal exits at once
+                os._exit(1)
+            stop.set()
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, on_signal)
+        await run_worker(
+            settings,
+            worker_id=settings.worker_id,
+            max_jobs=max_jobs,
+            lease_s=lease_s,
+            renew_s=renew_s,
+            fake_script=fake_script,
+            fake_git_state=fake_git_state,
+            exit_when_idle=exit_when_idle,
+            stop=stop,
+        )
+
+    try:
+        asyncio.run(main())
+    except ValueError as e:
+        typer.echo(str(e))
+        raise typer.Exit(2) from None
+    except KeyboardInterrupt:
+        pass
