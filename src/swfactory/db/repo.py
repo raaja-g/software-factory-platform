@@ -2,17 +2,28 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, insert, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from swfactory.commands import GATE_ACTIONS
-from swfactory.db.tables import AgentRun, App, Command, Job, JobEvent
+from swfactory.db.tables import (
+    AgentRun,
+    App,
+    BudgetReservation,
+    CatalogModel,
+    Command,
+    Job,
+    JobEvent,
+    ModelDecision,
+)
 from swfactory.domain.types import (
     DEFAULT_REVIEWERS,
     TERMINAL_STAGES,
@@ -22,6 +33,7 @@ from swfactory.domain.types import (
     Usage,
 )
 from swfactory.events import record_event
+from swfactory.models.catalog import ModelInfo
 
 
 class LeaseLost(Exception):
@@ -615,3 +627,191 @@ async def board(s: AsyncSession, *, app_slug: str | None = None) -> dict[str, An
             }
         )
     return {"jobs": out}
+
+
+# -- model catalog (M5.4) ----------------------------------------------------------------------
+
+
+def _model_info(r: CatalogModel) -> ModelInfo:
+    return ModelInfo(
+        alias=r.alias,
+        provider=r.provider,
+        upstream_id=r.upstream_id,
+        strength=r.strength or "",
+        price_in_per_mtok=r.price_in_per_mtok or Decimal(0),
+        price_out_per_mtok=r.price_out_per_mtok or Decimal(0),
+        context_window=r.context_window,
+        supports_tools=r.supports_tools,
+        messages_tools_ok=r.messages_tools_ok,
+        available=r.available,
+        error_class=r.error_class,
+        latency_ms=r.latency_ms,
+        last_error=r.last_error,
+    )
+
+
+async def upsert_models(
+    s: AsyncSession, infos: Sequence[ModelInfo], *, probed_at: datetime | None = None
+) -> None:
+    """Insert or update one row per alias; last_probe_at is set to probed_at (default now)."""
+    when = probed_at or datetime.now(UTC)
+    for i in infos:
+        values = {
+            "provider": i.provider,
+            "upstream_id": i.upstream_id,
+            "strength": i.strength,
+            "price_in_per_mtok": i.price_in_per_mtok,
+            "price_out_per_mtok": i.price_out_per_mtok,
+            "context_window": i.context_window,
+            "supports_tools": i.supports_tools,
+            "messages_tools_ok": i.messages_tools_ok,
+            "available": i.available,
+            "error_class": i.error_class,
+            "latency_ms": i.latency_ms,
+            "last_probe_at": when,
+            "last_error": i.last_error,
+        }
+        stmt = pg_insert(CatalogModel).values(alias=i.alias, **values)
+        await s.execute(
+            stmt.on_conflict_do_update(index_elements=[CatalogModel.alias], set_=values)
+        )
+
+
+async def get_model(s: AsyncSession, alias: str) -> ModelInfo | None:
+    r = await s.get(CatalogModel, alias)
+    return _model_info(r) if r is not None else None
+
+
+async def list_models(s: AsyncSession, *, available_only: bool = False) -> list[ModelInfo]:
+    q = select(CatalogModel).order_by(CatalogModel.alias)
+    if available_only:
+        q = q.where(CatalogModel.available.is_(True))
+    return [_model_info(r) for r in (await s.scalars(q)).all()]
+
+
+async def mark_model_unavailable(s: AsyncSession, alias: str, error_class: str, error: str) -> None:
+    """available=false with the error; last_probe_at stays so the next due probe re-checks."""
+    await s.execute(
+        update(CatalogModel)
+        .where(CatalogModel.alias == alias)
+        .values(available=False, error_class=error_class, last_error=error)
+    )
+
+
+async def mark_models_not_in_definition(s: AsyncSession, keep: Collection[str]) -> None:
+    await s.execute(
+        update(CatalogModel)
+        .where(CatalogModel.alias.not_in(list(keep)))
+        .values(available=False, last_error="not in definition")
+    )
+
+
+async def model_probe_state(s: AsyncSession) -> dict[str, tuple[datetime | None, str | None]]:
+    """alias -> (last_probe_at, error_class) for every stored row."""
+    rows = await s.execute(
+        select(CatalogModel.alias, CatalogModel.last_probe_at, CatalogModel.error_class)
+    )
+    return {a: (t, e) for a, t, e in rows.all()}
+
+
+async def insert_model_decision(
+    s: AsyncSession,
+    *,
+    job_id: UUID | None,
+    role: str | None,
+    round: int | None,
+    mode: str,
+    options: Sequence[Mapping[str, Any]],
+    chosen: str | None,
+    reason: str | None,
+    latency_ms: int | None,
+    purpose: str = "model",
+) -> UUID:
+    row = ModelDecision(
+        job_id=job_id,
+        role=role,
+        round=round,
+        purpose=purpose,
+        mode=mode,
+        options=list(options),
+        answer=None,
+        chosen=chosen,
+        reason=reason,
+        latency_ms=latency_ms,
+    )
+    s.add(row)
+    await s.flush()
+    return row.id
+
+
+async def last_model_decision(s: AsyncSession, job_id: UUID, role: str) -> str | None:
+    """The alias chosen by the latest model decision for (job, role); None when there is none."""
+    return await s.scalar(
+        select(ModelDecision.chosen)
+        .where(
+            ModelDecision.job_id == job_id,
+            ModelDecision.role == role,
+            ModelDecision.purpose == "model",
+            ModelDecision.chosen.is_not(None),
+        )
+        .order_by(ModelDecision.created_at.desc(), ModelDecision.id.desc())
+        .limit(1)
+    )
+
+
+# --------------------------------------------------------------------------
+# Spend and budget reservations (M5.7)
+# --------------------------------------------------------------------------
+
+
+async def spend_for_job(s: AsyncSession, job_id: UUID) -> Decimal:
+    """Money the job's agent runs have cost so far (open reservations are not included)."""
+    total = await s.scalar(
+        select(func.coalesce(func.sum(AgentRun.cost_usd), 0)).where(AgentRun.job_id == job_id)
+    )
+    return Decimal(total or 0)
+
+
+async def spend_since(s: AsyncSession, since: datetime, exclude_kind: str | None = None) -> Decimal:
+    """Agent-run cost since ``since`` across all jobs, leaving out jobs of ``exclude_kind``."""
+    q = (
+        select(func.coalesce(func.sum(AgentRun.cost_usd), 0))
+        .join(Job, Job.id == AgentRun.job_id)
+        .where(AgentRun.started_at >= since)
+    )
+    if exclude_kind is not None:
+        q = q.where(Job.kind != exclude_kind)
+    return Decimal(await s.scalar(q) or 0)
+
+
+async def spend_for_app_since(s: AsyncSession, app_slug: str, since: datetime) -> Decimal:
+    q = (
+        select(func.coalesce(func.sum(AgentRun.cost_usd), 0))
+        .join(Job, Job.id == AgentRun.job_id)
+        .join(App, App.id == Job.app_id)
+        .where(App.slug == app_slug, AgentRun.started_at >= since)
+    )
+    return Decimal(await s.scalar(q) or 0)
+
+
+async def open_reservations(
+    s: AsyncSession,
+    *,
+    job_id: UUID | None = None,
+    app_slug: str | None = None,
+    since: datetime | None = None,
+    exclude_kind: str | None = None,
+) -> Decimal:
+    """Sum of reservations not yet released, narrowed by job, app, start time and job kind."""
+    q = select(func.coalesce(func.sum(BudgetReservation.amount), 0)).where(
+        BudgetReservation.released_at.is_(None)
+    )
+    if job_id is not None:
+        q = q.where(BudgetReservation.job_id == job_id)
+    if since is not None:
+        q = q.where(BudgetReservation.created_at >= since)
+    if app_slug is not None:
+        q = q.join(App, App.id == BudgetReservation.app_id).where(App.slug == app_slug)
+    if exclude_kind is not None:
+        q = q.join(Job, Job.id == BudgetReservation.job_id).where(Job.kind != exclude_kind)
+    return Decimal(await s.scalar(q) or 0)

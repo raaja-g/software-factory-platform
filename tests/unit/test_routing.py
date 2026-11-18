@@ -174,3 +174,34 @@ def test_gate_artifacts():
         *sorted(r2_paths),
     ]
     assert gate_artifacts(s(gate_reason="step failed: prepare")) == []
+
+
+def test_route_after_approve_respects_require_human():
+    assert (
+        route_after_approve({"decision": "APPROVE", "require_human_approval": True}) == "human_gate"
+    )
+    assert (
+        route_after_approve({"decision": "APPROVE", "require_human_approval": False}) == "deliver"
+    )
+
+
+def test_transition_triage_gate_reason():
+    assert transition(
+        {"decision": "APPROVE", "require_human_approval": True}, "approve", "human_gate"
+    ) == {"gate_reason": "human approval required (triage)", "retry_node": None}
+    assert (
+        transition({"decision": "ESCALATE"}, "approve", "human_gate")["gate_reason"]
+        == "approver escalated"
+    )
+
+
+def test_cut_diff_gate_reason_wins():
+    from swfactory.graph.routing import REASON_DIFF_TOO_LARGE
+
+    st = JobState(decision="APPROVE", require_human_approval=True, diff_cut=True)
+    assert route_after_approve({**st, "require_human_approval": False}) == "human_gate"
+    assert transition(st, "approve", "human_gate") == {
+        "gate_reason": REASON_DIFF_TOO_LARGE,
+        "retry_node": None,
+    }
+    assert REASON_DIFF_TOO_LARGE == "diff too large to review fully"

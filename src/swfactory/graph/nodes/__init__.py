@@ -39,7 +39,7 @@ def merged(state: JobState, update: dict[str, Any]) -> JobState:
 def build_inputs(state: JobState, *, reviews: bool = True) -> list[str]:
     """Artifact names a step may read; ``materialize`` skips the ones that do not exist."""
     rnd = state.get("round", 1)
-    names = ["feature.md", "spec.md", "build.md", "verify.md"]
+    names = ["feature.md", "app.md", "requirements.md", "spec.md", "build.md", "verify.md"]
     for r in range(1, rnd + 1):
         names.append(f"rework-{r}.md")
     if reviews:

@@ -1,0 +1,34 @@
+schemaVersion: factory/v1
+name: gateway-fixture
+
+providers:
+  vertex:         { kind: vertex_ai, project_env: GOOGLE_CLOUD_PROJECT, location: global }
+  vertex-literal: { kind: vertex_ai, project: my-gcp-project, location: us-central1 }
+  gemini:         { kind: gemini, api_key_env: GEMINI_API_KEY }
+  groq:           { kind: groq, api_key_env: GROQ_API_KEY }
+  openrouter:     { kind: openrouter, api_key_env: OPENROUTER_API_KEY }
+  lmstudio:       { kind: lm_studio, base_url: http://host.docker.internal:1234/v1 }
+  ollama:         { kind: ollama, base_url: http://host.docker.internal:11434 }
+  openai:         { kind: openai_compatible, base_url: "http://some-proxy:8080/v1" }
+  anthropic:      { kind: anthropic_compatible, base_url: "http://some-proxy:8081" }
+
+models:
+  gemini-pro@vertex:    { provider: vertex, upstream_id: gemini-4-argon, strength: strong }
+  claude-sonnet@vertex: { provider: vertex, upstream_id: claude-sonnet-5-5, strength: strong }
+  flash@vertex-literal: { provider: vertex-literal, upstream_id: gemini-3.8-flash, strength: mid }
+  flash@gemini:         { provider: gemini, upstream_id: gemini-3.8-flash, strength: mid, price_in_per_mtok: 0.30, price_out_per_mtok: 2.50 }
+  coder@groq:           { provider: groq, upstream_id: some-coder, strength: cheap }
+  coder@openrouter:     { provider: openrouter, upstream_id: vendor/some-coder, strength: cheap }
+  qwen@lmstudio:        { provider: lmstudio, upstream_id: qwen3-coder, strength: local }
+  qwen@ollama:          { provider: ollama, upstream_id: "qwen3:30b", strength: local }
+  byo@openai:           { provider: openai, upstream_id: some-model, strength: mid }
+  byo@anthropic:        { provider: anthropic, upstream_id: some-claude, strength: mid }
+  gemini-flash@vertex:  { provider: vertex, upstream_id: gemini-3.8-flash, strength: mid }
+  gemini-lite@vertex:   { provider: vertex, upstream_id: gemini-3.5-flash-lite, strength: cheap }
+  claude-haiku@vertex:  { provider: vertex, upstream_id: claude-haiku-5-5, strength: cheap }
+
+apps:
+  demo:
+    repo_kind: local
+    repo_url: demo
+    test_command: "true"

@@ -130,6 +130,11 @@
           "title": "Repo Url",
           "type": "string"
         },
+        "reviewer_relevance": {
+          "default": false,
+          "title": "Reviewer Relevance",
+          "type": "boolean"
+        },
         "reviewers": {
           "default": [
             "security",
@@ -166,7 +171,20 @@
           "title": "Test Command"
         },
         "ui_globs": {
-          "default": [],
+          "default": [
+            "**/*.html",
+            "**/*.htm",
+            "**/*.css",
+            "**/*.scss",
+            "**/*.js",
+            "**/*.jsx",
+            "**/*.ts",
+            "**/*.tsx",
+            "**/*.vue",
+            "**/*.svelte",
+            "**/templates/**",
+            "**/static/**"
+          ],
           "items": {
             "type": "string"
           },
@@ -403,6 +421,21 @@
     "Budgets": {
       "additionalProperties": false,
       "properties": {
+        "app_monthly_usd": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "default": {},
+          "title": "App Monthly Usd",
+          "type": "object"
+        },
         "daily_usd": {
           "anyOf": [
             {
@@ -426,6 +459,20 @@
           ],
           "default": "10",
           "title": "Job Usd"
+        },
+        "step_max_usd": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "title": "Step Max Usd",
+          "type": "object"
         }
       },
       "title": "Budgets",
@@ -637,6 +684,19 @@
           "title": "Provider",
           "type": "string"
         },
+        "rpm": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rpm"
+        },
         "strength": {
           "enum": [
             "strong",
@@ -646,6 +706,19 @@
           ],
           "title": "Strength",
           "type": "string"
+        },
+        "tpm": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tpm"
         },
         "upstream_id": {
           "title": "Upstream Id",
@@ -1300,8 +1373,22 @@
     "budgets": {
       "$ref": "#/$defs/Budgets",
       "default": {
+        "app_monthly_usd": {},
         "daily_usd": "150",
-        "job_usd": "10"
+        "job_usd": "10",
+        "step_max_usd": {
+          "approver": "0.5",
+          "builder": "5",
+          "improver": "5",
+          "judge": "0.25",
+          "requirements": "2",
+          "reviewer-code": "1",
+          "reviewer-security": "1",
+          "reviewer-ui": "1",
+          "reviewer-ux": "1",
+          "spec-writer": "1",
+          "triage": "0.25"
+        }
       }
     },
     "concurrency": {

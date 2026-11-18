@@ -1,0 +1,1 @@
+{"error": {"message": "litellm.RateLimitError: Model rate limit exceeded. Model: gemini-flash-a, Limit: 1 rpm, enforced by the gateway (enforce_model_rate_limits)", "type": "None", "param": "None", "code": "429"}}

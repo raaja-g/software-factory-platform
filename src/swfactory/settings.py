@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     allowed_image_prefixes: CsvTuple = Field(
         default=("swfactory/",), validation_alias="FACTORY_ALLOWED_IMAGE_PREFIXES"
     )
+    artifacts_dir: Path = Field(
+        default=Path("/var/lib/factory/artifacts"), validation_alias="FACTORY_ARTIFACTS_DIR"
+    )
     host_repos_root: str | None = Field(default=None, validation_alias="FACTORY_HOST_REPOS_ROOT")
     host_home: str | None = Field(default=None, validation_alias="FACTORY_HOST_HOME")
 

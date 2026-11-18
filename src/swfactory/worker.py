@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+import httpx
 import psycopg
 import structlog
 from langchain_core.runnables import RunnableConfig
@@ -57,13 +58,16 @@ from swfactory.graph.build import (
     GRAPH_COMPAT,
     GRAPH_VERSION,
     build_job_graph,
+    graph_for,
     initial_state,
     node_timeouts,
 )
 from swfactory.graph.deps import Deps, unavailable
-from swfactory.graph.steps import _runner, pinned_definition
+from swfactory.graph.steps import _runner, pinned_definition, step_budget_s
 from swfactory.logging import log_context
+from swfactory.models.triage import TriageService
 from swfactory.queue import claim_next_job, release_job, renew_lease
+from swfactory.roles.library import RoleLibrary
 from swfactory.sandbox.fake import FakeSandboxProvider
 
 if TYPE_CHECKING:
@@ -75,6 +79,7 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)
 
 POLL_S = 5.0
+CATALOG_TICK_S = 300.0
 SHUTDOWN_WAIT_S = 20.0
 _ACTIVE = frozenset(st.value for st in ACTIVE_STAGES)
 
@@ -95,19 +100,31 @@ def build_worker_deps(
     if fake_script is None:
         raise ValueError("no engines yet: pass --fake-script (real engines arrive in M6)")
     register_engine(FakeEngine(FakeScript.from_yaml(fake_script)))
+    definitions = DefinitionStore(sessions, mode=settings.mode)
+    catalog: Any = unavailable("catalog", "M5")
+    gateway: Any = unavailable("gateway", "M5")
+    gateway_url = getattr(settings, "gateway_url", None)
+    master_key = getattr(settings, "gateway_master_key", None)
+    if gateway_url and master_key is not None:
+        from swfactory.gateway.client import GatewayClient
+        from swfactory.models.catalog import Catalog
+
+        gateway = GatewayClient(gateway_url, master_key.get_secret_value())
+        catalog = Catalog(sessions, gateway, definitions)
+    artifacts = ArtifactStore(sessions, settings.artifacts_dir)
     return Deps(
         sessions=sessions,
         events=EventBus(sessions, settings.libpq_dsn()),
-        artifacts=ArtifactStore(sessions),
+        artifacts=artifacts,
         sandboxes=FakeSandboxProvider(),  # pyright: ignore[reportArgumentType]
         selector=unavailable("selector", "M5"),
-        catalog=unavailable("catalog", "M5"),
-        gateway=unavailable("gateway", "M5"),
+        catalog=catalog,
+        gateway=gateway,
         budgets=unavailable("budgets", "M5"),
         git=FakeGitService(state_path=fake_git_state),
-        roles=unavailable("roles", "M3"),
-        triage=unavailable("triage", "M3"),
-        definitions=DefinitionStore(sessions, mode=settings.mode),
+        roles=RoleLibrary(),
+        triage=TriageService(definitions, artifacts),
+        definitions=definitions,
         scoring=unavailable("scoring", "M10"),
         settings=settings,
     )
@@ -209,7 +226,16 @@ async def _graph_run(
             f"worker stopped {job.crash_count} times while running this job",
         )
         return
-    graph = build_job_graph(deps, checkpointer, timeouts=node_timeouts(defn.factory.defaults))
+    defaults = defn.factory.defaults
+    timeouts = (
+        {"requirements": step_budget_s(defaults, "requirements")}
+        if job.kind == "requirements"
+        else node_timeouts(defaults)
+    )
+    builder = graph_for(job.kind)
+    if builder.__name__ == "build_job_graph":  # looked up here so a test can wrap it
+        builder = build_job_graph
+    graph = builder(deps, checkpointer, timeouts=timeouts)
     cfg: RunnableConfig = {
         "configurable": {
             "thread_id": str(job.id),
@@ -620,6 +646,25 @@ async def run_worker(
         await engine.dispose()
 
 
+async def catalog_tick(catalog: Any) -> None:
+    """One scheduled catalog refresh: never raises (an unreachable gateway is tried again)."""
+    try:
+        await catalog.refresh_if_due()
+    except NoActiveDefinition:
+        pass
+    except Exception as exc:
+        if isinstance(exc, httpx.TransportError):
+            log.warning("catalog.gateway_unreachable", error=repr(exc))
+        else:
+            log.warning("catalog.refresh_failed", error=repr(exc))
+
+
+async def _catalog_loop(catalog: Any, interval_s: float = CATALOG_TICK_S) -> None:
+    while True:
+        await catalog_tick(catalog)
+        await asyncio.sleep(interval_s)
+
+
 async def _shutdown(
     deps: Deps, driving: dict[UUID, asyncio.Task[None]], epochs: dict[UUID, int], worker_id: str
 ) -> None:
@@ -660,6 +705,13 @@ async def _loop(
     driving: dict[UUID, asyncio.Task[None]] = {}
     epochs: dict[UUID, int] = {}
     listener = asyncio.create_task(_listen(settings.libpq_dsn(), wake))
+    from swfactory.models.catalog import Catalog
+
+    ticker = (
+        asyncio.create_task(_catalog_loop(deps.catalog))
+        if isinstance(deps.catalog, Catalog)
+        else None
+    )
     try:
         while True:
             wake.clear()
@@ -717,6 +769,10 @@ async def _loop(
                         w.cancel()
     finally:
         listener.cancel()
+        if ticker is not None:
+            ticker.cancel()
         for task in driving.values():
             task.cancel()
-        await asyncio.gather(listener, *driving.values(), return_exceptions=True)
+        await asyncio.gather(
+            listener, *([ticker] if ticker else []), *driving.values(), return_exceptions=True
+        )

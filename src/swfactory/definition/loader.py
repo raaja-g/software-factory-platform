@@ -527,6 +527,28 @@ def load_definition(
     return _finish(shown, sha, reader, policy, mode)
 
 
+def _check_role_overrides(defn: Definition) -> list[DefinitionError]:
+    from swfactory.roles.library import (
+        DEFAULT_ROLES_DIR,
+        RoleFileError,
+        check_override,
+        parse_role_file,
+        spec_from_role_file,
+    )
+
+    errors: list[DefinitionError] = []
+    for role, rf in defn.roles.items():
+        file = f"roles/{role.value}.md"
+        try:
+            override = spec_from_role_file(rf, role=role)
+            default_path = DEFAULT_ROLES_DIR / f"{role.value}.md"
+            default = parse_role_file(default_path.read_text(encoding="utf-8"), role=role)
+            check_override(default, override)
+        except RoleFileError as e:
+            errors.append(DefinitionError(file, None, "", str(e)))
+    return errors
+
+
 def _finish(
     source: str, sha: str, reader: _Reader, policy: DefinitionPolicy, mode: FactoryMode
 ) -> LoadResult:
@@ -540,6 +562,8 @@ def _finish(
     for issue in issues:
         file, line, rest = _locate(issue.loc, sources)
         out.append(DefinitionError(file, line, _path_str(rest), issue.msg))
+    if defn is not None:
+        out.extend(_check_role_overrides(defn))
     if defn is not None and mode is FactoryMode.SERVER:
         for pname, prov in defn.factory.providers.items():
             if prov.subscription_backed:

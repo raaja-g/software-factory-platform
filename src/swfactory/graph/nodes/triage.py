@@ -1,14 +1,35 @@
 from __future__ import annotations
 
-from swfactory.domain.types import DEFAULT_REVIEWERS, Stage
+from swfactory.domain.types import Stage
 from swfactory.graph.deps import Deps
 from swfactory.graph.nodes import enter_stage, job_uuid
 from swfactory.graph.state import JobState
+from swfactory.graph.steps import pinned_definition
+from swfactory.models.triage import triage_to_json
 
 
 def make(deps: Deps):
     async def triage(state: JobState) -> dict:
-        await enter_stage(deps, job_uuid(state), Stage.TRIAGE)
-        return {"reviewers": list(DEFAULT_REVIEWERS)}  # M3.8 replaces it
+        job_id = job_uuid(state)
+        job, defn, app = await pinned_definition(deps, job_id)
+        result = await deps.triage.triage(job, app)
+        fields: dict = {
+            "triage": {
+                **(job.triage if isinstance(job.triage, dict) else {}),
+                **triage_to_json(result),
+            }
+        }
+        if not job.profile_name and result.profile_name:
+            fields["profile_name"] = result.profile_name
+        # intake always fills budget_usd (request, else app, else factory default): a value equal to
+        # that fallback means nobody asked for a specific budget
+        fallback = app.budget_usd or defn.factory.budgets.job_usd
+        if result.budget_usd is not None and job.budget_usd == fallback:
+            fields["budget_usd"] = result.budget_usd
+        await enter_stage(deps, job_id, Stage.TRIAGE, **fields)
+        return {
+            "reviewers": list(result.reviewers),
+            "require_human_approval": result.require_human_approval,
+        }
 
     return triage

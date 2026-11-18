@@ -9,10 +9,10 @@ from swfactory.sandbox.paths import IN
 pytestmark = pytest.mark.db
 
 
-async def test_put_get_list_materialize(sessions):
+async def test_put_get_list_materialize(sessions, tmp_path):
     await seed_demo(sessions)
     j = (await enq(sessions, app="demo")).id
-    store = ArtifactStore(sessions)
+    store = ArtifactStore(sessions, tmp_path)
     box = FakeSandbox(j)
     await store.put(j, "spec.md", "v1")
     meta = await store.put(j, "spec.md", "v2")

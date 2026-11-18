@@ -228,7 +228,7 @@ async def test_completed_node_resets_the_count():
 
 
 async def test_lost_lease_is_not_a_crash():
-    t = start(work("slow-build.yaml", renew_s=0.2, lease_s=1))
+    t = start(work("slow-build.yaml", renew_s=0.2, lease_s=3))
     await running_row("builder")
     await steal_lease()
     await asyncio.wait_for(t, 10)

@@ -19,6 +19,8 @@ REASON_REVIEWER_FAILED = "reviewer failed"
 REASON_CHECKS_FAILED = "checks failed"
 REASON_APPROVER_ESCALATED = "approver escalated"
 REASON_BUDGET = "budget"
+REASON_HUMAN_APPROVAL = "human approval required (triage)"
+REASON_DIFF_TOO_LARGE = "diff too large to review fully"
 
 
 def _current_reviews(state: JobState) -> dict[str, Any]:
@@ -59,7 +61,11 @@ def route_after_reviews(state: JobState) -> str:
 
 
 def route_after_approve(state: JobState) -> str:
-    return "deliver" if state.get("decision") == Decision.APPROVE.value else "human_gate"
+    if state.get("decision") != Decision.APPROVE.value:
+        return "human_gate"
+    if state.get("require_human_approval") or state.get("diff_cut"):
+        return "human_gate"
+    return "deliver"
 
 
 def route_after_human(state: JobState) -> str:
@@ -72,6 +78,22 @@ def route_after_human(state: JobState) -> str:
         return state.get("retry_node") or "human_gate"
     if action in (HumanAction.REJECT.value, HumanAction.CANCEL.value):
         return "finalize"
+    return "human_gate"
+
+
+REQUIREMENTS_GATE_REASON = "approve the backlog"
+
+
+def route_requirements_gate(state: JobState) -> str:
+    action = (state.get("human") or {}).get("action")
+    if action == HumanAction.APPROVE.value:
+        return "finalize"
+    if action in (HumanAction.REJECT.value, HumanAction.CANCEL.value):
+        return "finalize"
+    if action == HumanAction.REWORK.value:
+        return "requirements"
+    if action in (HumanAction.RETRY.value, HumanAction.ADD_BUDGET.value):
+        return state.get("retry_node") or "requirements"
     return "human_gate"
 
 
@@ -110,7 +132,14 @@ def transition(state: JobState, source: str, target: str) -> dict[str, Any]:
         if source == "verify":
             return {"gate_reason": REASON_CHECKS_FAILED, "retry_node": "verify"}
         if source == "approve":
-            return {"gate_reason": REASON_APPROVER_ESCALATED, "retry_node": None}
+            approved = state.get("decision") == Decision.APPROVE.value
+            if approved and state.get("diff_cut"):
+                reason = REASON_DIFF_TOO_LARGE
+            elif approved and state.get("require_human_approval"):
+                reason = REASON_HUMAN_APPROVAL
+            else:
+                reason = REASON_APPROVER_ESCALATED
+            return {"gate_reason": reason, "retry_node": None}
     if source == "human_gate":
         update: dict[str, Any] = {"gate_reason": None, "retry_node": None}
         if target == "finalize":

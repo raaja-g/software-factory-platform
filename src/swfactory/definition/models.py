@@ -21,6 +21,7 @@ from pydantic import (
 )
 from pydantic.json_schema import models_json_schema
 
+from swfactory.costs.pricing import STEP_MAX_DEFAULT_USD, STEP_MIN_USD
 from swfactory.domain.types import (
     DEFAULT_REVIEWERS,
     FactoryMode,
@@ -77,6 +78,29 @@ class Defaults(StrictModel):
 class Budgets(StrictModel):
     job_usd: Decimal = Decimal("10")
     daily_usd: Decimal = Decimal("150")
+    app_monthly_usd: dict[str, Decimal] = {}
+    step_max_usd: dict[str, Decimal] = Field(
+        default_factory=lambda: {r.value: v for r, v in STEP_MAX_DEFAULT_USD.items()}
+    )
+
+    @field_validator("step_max_usd", mode="before")
+    @classmethod
+    def _step_max(cls, v: Any) -> Any:
+        if not isinstance(v, Mapping):
+            return v
+        out = {r.value: d for r, d in STEP_MAX_DEFAULT_USD.items()}
+        for key, raw in v.items():
+            try:
+                role = Role(key)
+            except ValueError:
+                raise ValueError(f"step_max_usd: unknown role {key}") from None
+            val = Decimal(str(raw))
+            if val < STEP_MIN_USD[role]:
+                raise ValueError(
+                    f"step_max_usd: {key} {val} is below its step minimum {STEP_MIN_USD[role]}"
+                )
+            out[key] = val
+        return out
 
 
 class Concurrency(StrictModel):
@@ -133,6 +157,8 @@ class ModelAliasDef(StrictModel):
     price_in_per_mtok: Decimal | None = None
     price_out_per_mtok: Decimal | None = None
     context_window: int | None = None
+    rpm: int | None = Field(default=None, gt=0)
+    tpm: int | None = Field(default=None, gt=0)
 
 
 class RegistryDef(StrictModel):
@@ -202,8 +228,22 @@ class AppDef(StrictModel):
     runner: str = "standard"
     test_command: str | None = None
     protected_paths: tuple[str, ...] = ()
-    ui_globs: tuple[str, ...] = ()
+    ui_globs: tuple[str, ...] = (
+        "**/*.html",
+        "**/*.htm",
+        "**/*.css",
+        "**/*.scss",
+        "**/*.js",
+        "**/*.jsx",
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.vue",
+        "**/*.svelte",
+        "**/templates/**",
+        "**/static/**",
+    )
     reviewers: tuple[str, ...] = DEFAULT_REVIEWERS
+    reviewer_relevance: bool = False
     registries: tuple[str, ...] = ()
     sensitive: bool = False
     max_rounds: int | None = None
@@ -545,6 +585,13 @@ def check_references(defn: Definition, policy: DefinitionPolicy) -> tuple[Defini
     for alias, m in f.models.items():
         if m.provider not in f.providers:
             ref(("factory", "models", alias, "provider"), f"unknown provider '{m.provider}'")
+
+    for slug in f.budgets.app_monthly_usd:
+        if slug not in f.apps:
+            ref(
+                ("factory", "budgets", "app_monthly_usd"),
+                f"app_monthly_usd: unknown app {slug}",
+            )
 
     for slug, app in f.apps.items():
         base = ("factory", "apps", slug)

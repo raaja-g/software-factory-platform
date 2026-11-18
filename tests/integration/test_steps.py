@@ -293,7 +293,7 @@ async def test_missing_verdict_line_is_error(env):
     )
     assert (out.verdict, out.status) == (Verdict.ERROR, RunStatus.FAILED)
     rows = await env.rows(Role.REVIEWER_SECURITY)
-    assert len(rows) == 1 and rows[0].error.startswith("contract:")
+    assert len(rows) == 2 and all(r.error.startswith("contract:") for r in rows)
 
 
 async def test_task_timeout_comes_from_pinned_definition(sessions):

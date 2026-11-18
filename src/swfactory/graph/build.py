@@ -33,6 +33,7 @@ from swfactory.graph.nodes import (
     triage,
     verify,
 )
+from swfactory.graph.nodes import requirements as req_nodes
 from swfactory.graph.routing import failure_update
 from swfactory.graph.state import JobState, ReviewTask
 from swfactory.graph.steps import step_budget_s
@@ -57,6 +58,7 @@ NODE_NAMES = (
     "finalize",
     "score",
 )
+REQUIREMENTS_NODE_NAMES = ("prepare", "requirements", "human_gate", "finalize")
 AGENT_NODES = ("triage", "spec", "build", "review", "approve")
 _NO_HANDLER_GATE = ("finalize", "score")
 PAUSE_ENV = (
@@ -99,7 +101,9 @@ def initial_state(job: Job, defn: Definition) -> JobState:
     )
 
 
-def make_error_handler(node: str) -> Callable[[JobState, NodeError], Command]:
+def make_error_handler(
+    node: str, *, gate_all: bool = False
+) -> Callable[[JobState, NodeError], Command]:
     """A node's error handler: failures go to the human gate, except score and finalize."""
 
     def handler(state: JobState, error: NodeError) -> Command:
@@ -108,7 +112,7 @@ def make_error_handler(node: str) -> Callable[[JobState, NodeError], Command]:
         if isinstance(cause, LeaseLost):  # never write a gate into a thread another worker drives
             raise cause
         if (
-            node in _NO_HANDLER_GATE
+            node in _NO_HANDLER_GATE and not gate_all
         ):  # L13, L14: scoring never reaches a person; finalize runs after the outcome
             return Command(goto=END)
         return Command(goto="human_gate", update=failure_update(node))
@@ -199,3 +203,33 @@ def build_job_graph(
     g.add_edge("finalize", "score")
     g.add_edge("score", END)
     return g.compile(checkpointer=checkpointer)
+
+
+def build_requirements_graph(
+    deps: Deps, checkpointer: BaseCheckpointSaver, *, timeouts: Mapping[str, int] | None = None
+) -> CompiledStateGraph:
+    limits = (
+        dict(timeouts)
+        if timeouts is not None
+        else {"requirements": step_budget_s(Defaults(), "requirements")}
+    )
+    makers = {
+        "prepare": req_nodes.make_prepare(deps),
+        "requirements": req_nodes.make_requirements(deps),
+        "human_gate": human_gate.make(deps),
+        "finalize": req_nodes.make_finalize(deps),
+    }
+    g = StateGraph(JobState)
+    for name in REQUIREMENTS_NODE_NAMES:
+        kwargs: dict[str, Any] = {"error_handler": make_error_handler(name, gate_all=True)}
+        if name == "requirements":
+            kwargs["timeout"] = TimeoutPolicy(run_timeout=limits["requirements"] + 60)
+        g.add_node(name, _leased(deps, _paused(name, makers[name])), **kwargs)
+    g.add_edge(START, "prepare")
+    g.add_edge("prepare", "requirements")
+    g.add_edge("finalize", END)
+    return g.compile(checkpointer=checkpointer)
+
+
+def graph_for(kind: str) -> Callable[..., CompiledStateGraph]:
+    return build_requirements_graph if kind == "requirements" else build_job_graph

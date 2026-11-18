@@ -41,6 +41,10 @@ class InMemoryArtifactStore:
         row = self._rows.get((job_id, path))
         return None if row is None else row[1]
 
+    async def get_bytes(self, job_id: UUID, path: str) -> bytes | None:
+        row = self._rows.get((job_id, path))
+        return None if row is None else row[1].encode()
+
     async def list(self, job_id: UUID) -> list[ArtifactMeta]:
         return sorted(
             (m for (j, _), (m, _) in self._rows.items() if j == job_id), key=lambda m: m.path

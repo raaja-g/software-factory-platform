@@ -4,7 +4,7 @@ Updated after every completed step.
 
 ## Now
 
-M2 is done; starting M3 (roles, contracts, triage, requirements agent). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
+M3 is done; starting M4 (sandboxes, verify gate, local git). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
 
 ## Plan revision (before coding)
 
@@ -50,6 +50,26 @@ M2 is done; starting M3 (roles, contracts, triage, requirements agent). M0's spi
 - [x] **2026-11-18** M2.8 Board query
 - [x] **2026-11-18** M2 exit check: 212 default tests, 166 database tests, ruff and pyright clean. Widened one timing-sensitive lease test that failed once under load.
 
+## M3 Roles, contracts, triage, requirements, and the first half of M5 (done)
+
+- [x] **2026-11-18** M3.1 Role files and `RoleLibrary` (ten roles)
+- [x] **2026-11-18** M3.2 Output contracts
+- [x] **2026-11-18** M3.3 Fencing untrusted text
+- [x] **2026-11-18** M3.4 Prompt rendering and trimming
+- [x] **2026-11-18** M3.5 Volume storage, dedupe and redaction for the artifact store
+- [x] **2026-11-18** M3.6 Real prompts and the contract repair flow
+- [x] **2026-11-18** M3.7 Rules-based triage and `reviewers_for`
+- [x] **2026-11-18** M3.8 Triage and reviewer selection wired into the loop
+- [x] **2026-11-18** M3.9 Requirements job: graph, gate and approval
+- [x] **2026-11-18** M5.1 Render the LiteLLM config
+- [x] **2026-11-18** M5.3 Gateway client: keys, spend, prices, probes
+- [x] **2026-11-18** M5.4 Catalog refresh, schedule and models CLI
+- [x] **2026-11-18** M5.5 Profiles: resolution and validation
+- [x] **2026-11-18** M5.6 Fixed model selection with recorded fallback
+- [x] **2026-11-18** M5.7 Budgets, reservations and pricing
+- [x] **2026-11-18** M3 exit check: 413 default tests, 221 database tests, ruff and pyright clean. Fixed the cause of recurring timing failures in the worker tests (leases of 1 s were too tight under load; now 3 s).
+- [ ] M5.2 (gateway services in compose, needs M4.3a), M5.8 (wire into `run_agent_step`) and M5.9 wait for M4.
+
 ## Milestones
 
 Order for now: everything runs on your Mac. M0, then M1 to M8, then M10, M11 and M12. M9 (the GCP team instance) and the team-only parts of M13 wait until you ask for them. The private package mirror moves earlier, because your first apps need private packages.
@@ -59,9 +79,9 @@ Order for now: everything runs on your Mac. M0, then M1 to M8, then M10, M11 and
 | M0 Spikes | not started |
 | M1 Foundation | done |
 | M2 Loop with fakes | done |
-| M3 Roles, contracts, triage | not started |
+| M3 Roles, contracts, triage | done |
 | M4 Sandboxes, verify gate, local git | not started |
-| M5 Gateway, models, cost | not started |
+| M5 Gateway, models, cost | first half done (M5.1, 5.3 to 5.7); the rest after M4 |
 | M6 Engines | not started |
 | M7 API, dashboard, CLI, local release | not started |
 | M8 GitHub and automations | not started |

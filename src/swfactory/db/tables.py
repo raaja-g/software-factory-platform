@@ -2,7 +2,7 @@
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -10,6 +10,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     ForeignKey,
     Index,
     Integer,
@@ -394,3 +395,22 @@ class ApiToken(Base):
     last_used_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
     expires_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
     revoked_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
+
+
+class BudgetReservation(Base):
+    __tablename__ = "budget_reservations"
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    job_id: Mapped[uuid.UUID] = _fk("app.jobs.id", nullable=False)
+    app_id: Mapped[uuid.UUID | None] = _fk("app.apps.id")
+    role: Mapped[str] = mapped_column(Text)
+    round: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    day: Mapped[date] = mapped_column(Date)
+    month: Mapped[date] = mapped_column(Date)
+    amount: Mapped[Decimal] = _money(nullable=False)
+    actual_usd: Mapped[Decimal | None] = _money()
+    created_at: Mapped[datetime] = _ts()
+    released_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
+    __table_args__ = (
+        Index("budget_reservations_job_id_idx", "job_id"),
+        Index("budget_reservations_open_idx", "day", postgresql_where=text("released_at IS NULL")),
+    )

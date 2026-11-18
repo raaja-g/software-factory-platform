@@ -1,0 +1,1 @@
+{"error": {"code": 429, "message": "Quota exceeded for aiplatform.googleapis.com/online_prediction_requests_per_base_model with base model: gemini-pro. Please submit a quota increase request.", "status": "RESOURCE_EXHAUSTED"}}

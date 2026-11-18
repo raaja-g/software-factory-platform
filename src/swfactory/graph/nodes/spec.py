@@ -20,7 +20,7 @@ def make(deps: Deps):
             job_id=job_id,
             role=Role.SPEC_WRITER,
             round=state.get("round", 1),
-            inputs=["feature.md"],
+            inputs=["feature.md", "requirements.md", "triage.md", "app.md"],
             output_name="spec.md",
             workdir=REPO,
             tool_policy=ToolPolicy.READ_ONLY,

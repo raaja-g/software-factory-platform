@@ -1,0 +1,75 @@
+model_list:
+- model_name: gemini-pro@vertex
+  litellm_params:
+    model: vertex_ai/gemini-4-argon
+    vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+    vertex_location: global
+- model_name: claude-sonnet@vertex
+  litellm_params:
+    model: vertex_ai/claude-sonnet-5-5
+    vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+    vertex_location: global
+- model_name: flash@vertex-literal
+  litellm_params:
+    model: vertex_ai/gemini-3.8-flash
+    vertex_project: my-gcp-project
+    vertex_location: us-central1
+- model_name: flash@gemini
+  litellm_params:
+    model: gemini/gemini-3.8-flash
+    api_key: os.environ/GEMINI_API_KEY
+  model_info:
+    input_cost_per_token: 3.0e-07
+    output_cost_per_token: 2.5e-06
+- model_name: coder@groq
+  litellm_params:
+    model: groq/some-coder
+    api_key: os.environ/GROQ_API_KEY
+- model_name: coder@openrouter
+  litellm_params:
+    model: openrouter/vendor/some-coder
+    api_key: os.environ/OPENROUTER_API_KEY
+- model_name: qwen@lmstudio
+  litellm_params:
+    model: lm_studio/qwen3-coder
+    api_base: http://host.docker.internal:1234/v1
+  model_info:
+    input_cost_per_token: 0
+    output_cost_per_token: 0
+- model_name: qwen@ollama
+  litellm_params:
+    model: ollama_chat/qwen3:30b
+    api_base: http://host.docker.internal:11434
+  model_info:
+    input_cost_per_token: 0
+    output_cost_per_token: 0
+- model_name: byo@openai
+  litellm_params:
+    model: openai/some-model
+    api_base: http://some-proxy:8080/v1
+- model_name: byo@anthropic
+  litellm_params:
+    model: anthropic/some-claude
+    api_base: http://some-proxy:8081
+- model_name: gemini-flash@vertex
+  litellm_params:
+    model: vertex_ai/gemini-3.8-flash
+    vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+    vertex_location: global
+- model_name: gemini-lite@vertex
+  litellm_params:
+    model: vertex_ai/gemini-3.5-flash-lite
+    vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+    vertex_location: global
+- model_name: claude-haiku@vertex
+  litellm_params:
+    model: vertex_ai/claude-haiku-5-5
+    vertex_project: os.environ/GOOGLE_CLOUD_PROJECT
+    vertex_location: global
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  proxy_batch_write_at: 5
+  database_connection_pool_limit: 10
+litellm_settings:
+  turn_off_message_logging: true
+  redact_user_api_key_info: true

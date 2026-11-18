@@ -13,13 +13,15 @@ from tests.fakes.artifacts import InMemoryArtifactStore
 
 from swfactory.artifacts import ArtifactStore
 from swfactory.definition.loader import init_definition_repo, load_definition
-from swfactory.definition.models import AppDef, Concurrency, Defaults
+from swfactory.definition.models import AppDef, Concurrency, Defaults, TriageConfig
 from swfactory.definition.store import DefinitionStore
 from swfactory.engines.fake import FakeEngine, FakeScript
 from swfactory.engines.registry import register_engine
 from swfactory.events import EventBus
 from swfactory.gitops.fake import FakeGitService
 from swfactory.graph.deps import Deps, unavailable
+from swfactory.models.triage import TriageService
+from swfactory.roles.library import RoleLibrary
 from swfactory.sandbox.base import ExecResult
 from swfactory.sandbox.fake import FakeSandboxProvider
 from swfactory.settings import get_settings
@@ -34,6 +36,7 @@ async def seed_demo(
     defaults: Mapping[str, Any] = {},  # noqa: B006
     apps: Sequence[str] = ("demo",),
     concurrency: Mapping[str, int] | None = None,
+    triage_rules: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     """Save and activate a definition (unique sha) with the given apps; return its sha."""
     with tempfile.TemporaryDirectory() as d:
@@ -48,6 +51,9 @@ async def seed_demo(
         {**r.definition.factory.defaults.model_dump(), **defaults}
     )
     fac = r.definition.factory.model_copy(update={"apps": app_defs, "defaults": new_defaults})
+    if triage_rules:
+        tri = TriageConfig.model_validate({"rules": list(triage_rules)})
+        fac = fac.model_copy(update={"triage": tri})
     if concurrency is not None:
         fac = fac.model_copy(
             update={
@@ -70,19 +76,21 @@ def make_test_deps(
     git: FakeGitService | None = None,
 ) -> Deps:
     register_engine(FakeEngine(script))
+    artifacts = ArtifactStore(sessions, Path(tempfile.mkdtemp(prefix="artifacts-")))
+    definitions = DefinitionStore(sessions)
     return Deps(
         sessions=sessions,
         events=EventBus(sessions, ""),
-        artifacts=ArtifactStore(sessions),
+        artifacts=artifacts,
         sandboxes=FakeSandboxProvider(exec_results),  # pyright: ignore[reportArgumentType]
         selector=unavailable("selector", "M5"),
         catalog=unavailable("catalog", "M5"),
         gateway=unavailable("gateway", "M5"),
         budgets=unavailable("budgets", "M5"),
         git=git or FakeGitService(),
-        roles=unavailable("roles", "M3"),
-        triage=unavailable("triage", "M3"),
-        definitions=DefinitionStore(sessions),
+        roles=RoleLibrary(),
+        triage=TriageService(definitions, artifacts),
+        definitions=definitions,
         scoring=unavailable("scoring", "M10"),
         settings=get_settings(),
     )
@@ -100,7 +108,7 @@ def make_unit_deps(script: FakeScript | None = None) -> Deps:
         gateway=unavailable("gateway", "M5"),
         budgets=unavailable("budgets", "M5"),
         git=FakeGitService(),
-        roles=unavailable("roles", "M3"),
+        roles=RoleLibrary(),
         triage=unavailable("triage", "M3"),
         definitions=unavailable("definitions", "the db tests"),
         scoring=unavailable("scoring", "M10"),

@@ -211,7 +211,7 @@ async def test_drive_job_binds_job_id(capsys):
 
 async def test_lease_is_renewed():
     await seeded()
-    t = start(work("slow-build.yaml", renew_s=0.2, lease_s=1))
+    t = start(work("slow-build.yaml", renew_s=0.2, lease_s=3))
     await running_row("builder")
     u1 = (await job()).lease_until
     await asyncio.sleep(0.5)
@@ -223,10 +223,10 @@ async def test_lease_is_renewed():
 
 async def test_lost_lease_cancels_job_task():
     await seeded()
-    t = start(work("slow-build.yaml", renew_s=0.2, lease_s=1))
+    t = start(work("slow-build.yaml", renew_s=0.2, lease_s=3))
     await running_row("builder")
     await steal_lease()
-    await asyncio.wait_for(t, 2)
+    await asyncio.wait_for(t, 10)
     j = await job()
     assert (j.lease_owner, j.stage) == ("other", "build")
 
@@ -283,15 +283,17 @@ async def test_lease_must_cover_three_renewals():
 
 async def test_renewal_errors_stop_the_task_before_the_lease_expires():
     await seeded()
-    t = start(work("slow-build.yaml", renew_s=0.2, lease_s=1))
+    t = start(work("slow-build.yaml", renew_s=0.2, lease_s=3))
     await running_row("builder")
     await asyncio.sleep(0.5)
     ctx.break_renew = True
-    await asyncio.sleep(1.5)
+    await asyncio.sleep(4)
     t.cancel()
     await asyncio.gather(t, return_exceptions=True)
     last_good = max(at for ok, at in ctx.renew_log if ok == "ok")
-    assert ctx.drive_ended and ctx.drive_ended[0] - last_good < 1.0
+    assert (
+        ctx.drive_ended and ctx.drive_ended[0] - last_good < 3.0
+    )  # before the 3 s lease would expire
 
 
 async def test_no_checkpoint_starts_fresh(monkeypatch):

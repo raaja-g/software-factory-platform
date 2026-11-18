@@ -1,0 +1,1 @@
+{"error": {"message": "litellm.NotFoundError: Vertex_aiException - Publisher Model `projects/p/locations/global/publishers/anthropic/models/claude-opus-4-7` was not found or your project does not have access to it. Received Model Group=not-enabled-a", "type": null, "param": null, "code": "404"}}

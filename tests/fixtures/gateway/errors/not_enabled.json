@@ -1,0 +1,1 @@
+{"error": {"code": 400, "message": "Publisher Model `projects/p/locations/global/publishers/anthropic/models/claude-opus-4-7` is not servicing the request: the model is not enabled for this project.", "status": "FAILED_PRECONDITION"}}

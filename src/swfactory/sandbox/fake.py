@@ -52,6 +52,9 @@ class FakeSandbox:
     async def write_bytes(self, path: str, content: bytes) -> None:
         self.files[path] = content
 
+    async def remove(self, path: str) -> None:
+        self.files.pop(path, None)
+
     async def copy_out(self, path: str, dest: Path, *, max_bytes: int) -> int:
         data = self.files[path]
         if len(data) > max_bytes:

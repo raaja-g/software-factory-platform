@@ -6,11 +6,16 @@ from langgraph.types import Command, interrupt
 from sqlalchemy import func, select
 
 from swfactory.db.tables import JobEvent
-from swfactory.domain.types import HumanAction
+from swfactory.domain.types import HumanAction, Stage
 from swfactory.events import record_event
 from swfactory.graph.deps import Deps
 from swfactory.graph.nodes import job_uuid, merged
-from swfactory.graph.routing import gate_artifacts, route_after_human, transition
+from swfactory.graph.routing import (
+    gate_artifacts,
+    route_after_human,
+    route_requirements_gate,
+    transition,
+)
 from swfactory.graph.state import JobState
 
 
@@ -40,12 +45,31 @@ def make(deps: Deps):
             if data not in list(seen):
                 await record_event(s, job_id, "human.action", data)
 
+    def _requirements_artifacts(state: JobState) -> list[str]:
+        reason = state.get("gate_reason") or ""
+        paths = ["requirements.md"]
+        if reason.startswith("step failed"):
+            paths.append("requirements.invalid.md")
+        return paths
+
+    def _requirements_update(new: JobState, human: dict[str, Any]) -> dict[str, Any]:
+        action = human.get("action")
+        update: dict[str, Any] = {"gate_reason": None}
+        if action == HumanAction.APPROVE.value:
+            update.update(outcome=Stage.MERGED.value, approved_by=human.get("by"), retry_node=None)
+        elif action in (HumanAction.REJECT.value, HumanAction.CANCEL.value):
+            update.update(outcome=Stage.CLOSED.value, retry_node=None)
+        elif action == HumanAction.REWORK.value:  # not limited to max_rounds
+            update.update(round=new.get("round", 1) + 1, retry_node=None)
+        return update
+
     async def human_gate(state: JobState) -> Command:
+        is_req = state.get("kind") == "requirements"
         value = interrupt(
             {
                 "reason": state.get("gate_reason"),
                 "retry_node": state.get("retry_node"),
-                "artifacts": gate_artifacts(state),
+                "artifacts": _requirements_artifacts(state) if is_req else gate_artifacts(state),
             }
         )
         human: dict[str, Any] = dict(value)
@@ -57,6 +81,10 @@ def make(deps: Deps):
         await _emit_action_once(state, human)
         update: dict = {"human": human}
         new = merged(state, update)
+        if is_req:
+            target = route_requirements_gate(new)
+            update.update(_requirements_update(new, human))
+            return Command(goto=target, update=update)
         target = route_after_human(new)
         update.update(transition(new, "human_gate", target))
         return Command(goto=target, update=update)

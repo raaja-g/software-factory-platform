@@ -27,7 +27,7 @@ def make(deps: Deps):
                 job_id=job_id,
                 role=reviewer_role(kind),
                 round=rnd,
-                inputs=["feature.md", "spec.md", "build.md", "verify.md"],
+                inputs=["feature.md", "app.md", "spec.md", "build.md", "verify.md"],
                 output_name=out_name,
                 workdir=REPO,
                 tool_policy=ToolPolicy.READ_ONLY,

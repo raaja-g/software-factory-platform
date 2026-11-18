@@ -24,7 +24,7 @@ def make(deps: Deps):
         rnd = state.get("round", 1)
         await enter_stage(deps, job_id, Stage.APPROVE)
         _, defn, app = await pinned_definition(deps, job_id)
-        inputs = ["feature.md", "spec.md", "build.md", "verify.md"]
+        inputs = ["feature.md", "app.md", "spec.md", "build.md", "verify.md"]
         inputs += [
             f"round-{r}/review-{k}.md"
             for r in range(1, rnd + 1)
@@ -53,7 +53,12 @@ def make(deps: Deps):
         data: dict = {"decision": decision.value, "round": rnd, "head_sha": head}
         if reason is not None:
             data.update(overridden=True, reason=reason)
-        update: dict = {"decision": decision.value}
+        cut = out.diff_cut or any(
+            o.get("diff_cut", False) for o in state.get("reviews", {}).get(str(rnd), {}).values()
+        )
+        update: dict = {"decision": decision.value, "diff_cut": cut}
+        if cut:
+            update["require_human_approval"] = True
         if decision == Decision.APPROVE:
             update["approved_head"] = head
         async with deps.sessions.begin() as s:

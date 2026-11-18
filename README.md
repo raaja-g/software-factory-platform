@@ -2,7 +2,7 @@
 
 A platform that turns a requirement into reviewed, merged code. For each feature it runs spec, build, verify, four independent reviews, approve and deliver, using coding agents on any model provider. It runs on your machine in Docker, many apps and features at a time.
 
-**Status: under construction.** Milestones M1 (foundation) and M2 (the job loop) are done. See [progress.md](progress.md) for the step-by-step status.
+**Status: under construction.** Milestones M1 (foundation), M2 (the job loop) and M3 (roles and contracts) are done, along with the first half of M5 (models and cost). See [progress.md](progress.md) for the step-by-step status.
 
 ## What works now (M1 and M2)
 
@@ -21,7 +21,11 @@ A platform that turns a requirement into reviewed, merged code. For each feature
   - A worker claims jobs with leases, runs up to a set number at once, backs off and finally fails a job that keeps crashing it, and shuts down cleanly.
   - `factory jobs board` prints the board as JSON.
 
-No real agents run yet: M3 onward adds roles, sandboxes and the model gateway.
+- **Roles and contracts (M3).** Ten engine-neutral role files (`defaults/roles/*.md`: triage, requirements, spec-writer, builder, four reviewers, approver, judge, improver). Every output has a strict contract (a review starts with `VERDICT: PASS` or `VERDICT: CHANGES`, a decision with `APPROVE` or `ESCALATE`); a near miss gets one repair attempt and is never read as a pass. Untrusted text (issue bodies, repo files) is fenced as data, and prompts are trimmed to fit a model's context, with huge diffs cut at file boundaries and sent to a person. Artifacts are stored deduplicated and redacted. Rules-based triage picks the reviewers.
+- **Requirements jobs (M3).** A requirement becomes a `requirements.md` and an ordered backlog that a person approves; its feature jobs then run one after another, each merged before the next starts.
+- **Models and cost (first half of M5).** The LiteLLM gateway config is rendered from your definition (`factory gateway render`); a gateway client handles per-run keys, spend and probes; a model catalog records what is actually available (`factory models refresh`, `factory models list`); profiles choose a model per role, with a recorded fallback; budgets reserve spend per run so parallel runs cannot overspend.
+
+Still fake: no real coding agent runs yet. Sandboxes, the verify gate and local git come next (M4), then the rest of M5 and the engine adapters (M6).
 
 ## Set up and run
 
@@ -56,4 +60,4 @@ uv run pytest -m db                             # needs the Postgres container
 
 ## Next
 
-M3: role files, output contracts, fencing of untrusted text, triage, and the requirements agent. Then sandboxes and the verify gate (M4), the model gateway and cost limits (M5), and the coding-agent adapters (M6).
+M4: hardened Docker sandboxes, the verify gate, and local git (including delivery into a folder on your Mac). Then the gateway services and run keys (rest of M5), and the coding-agent adapters (M6).
