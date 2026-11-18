@@ -6,6 +6,7 @@ import pytest_asyncio
 from tests.support.pg import truncate_app_tables
 
 from swfactory.db.engine import make_engine, make_sessionmaker
+from swfactory.db.migrate import upgrade_database
 from swfactory.settings import get_settings
 
 
@@ -33,7 +34,9 @@ async def pg_url():
     name = f"factory_test_{uuid.uuid4().hex[:8]}"
     await _admin(base, f'create database "{name}"')
     try:
-        yield _db_url_with(base, name)
+        url = _db_url_with(base, name)
+        upgrade_database(url)
+        yield url
     finally:
         await _admin(base, f'drop database if exists "{name}" with (force)')
 

@@ -54,7 +54,7 @@ markers = [
     "e2e: the full loop with real models",
     "ui: dashboard tests with Playwright and local Chromium, no Docker, database or network",
 ]
-addopts = "--strict-markers -m 'not db and not docker and not live and not e2e and not ui'"
+addopts = "--strict-markers --import-mode=importlib -m 'not db and not docker and not live and not e2e and not ui'"
 
 [tool.pyright]
 typeCheckingMode = "basic"

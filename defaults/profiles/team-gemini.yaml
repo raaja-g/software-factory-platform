@@ -1,0 +1,22 @@
+description: Everything on Gemini via Vertex, with a Claude security reviewer when Claude is enabled
+continuity: fresh
+roles:
+  spec-writer: { engine: opencode, model: gemini-flash@vertex }
+  requirements: { engine: opencode, model: gemini-pro@vertex }
+  builder:
+    engine: opencode
+    model: gemini-pro@vertex
+    mode: fixed
+    sticky: true
+    fallback: [gemini-flash@vertex]
+    tiers:
+      - { label: A, model: gemini-lite@vertex,  description: "cheap and fast; one-file edits, docs, config" }
+      - { label: B, model: gemini-flash@vertex, description: "a typical feature in one module, with tests" }
+      - { label: C, model: gemini-pro@vertex,   description: "multi-file or security-sensitive change, or round 2" }
+  reviewer-security: { engine: opencode, model: claude-sonnet@vertex, fallback: [gemini-pro@vertex] }
+  reviewer-code:     { engine: opencode, model: gemini-flash@vertex }
+  reviewer-ux:       { engine: direct,   model: gemini-flash@vertex }
+  reviewer-ui:       { engine: direct,   model: gemini-flash@vertex }
+  approver:          { engine: direct,   model: gemini-flash@vertex }
+  judge:             { engine: direct,   model: claude-haiku@vertex, fallback: [gemini-lite@vertex] }
+  improver:          { engine: opencode, model: gemini-pro@vertex }

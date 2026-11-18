@@ -1,0 +1,22 @@
+description: Claude Code on Claude via Vertex, with a Gemini security reviewer (other family)
+continuity: fresh
+roles:
+  spec-writer: { engine: claude_code, model: claude-sonnet@vertex }
+  requirements: { engine: claude_code, model: claude-sonnet@vertex }
+  builder:
+    engine: claude_code
+    model: claude-sonnet@vertex
+    mode: fixed
+    sticky: true
+    fallback: [claude-opus@vertex]
+    tiers:
+      - { label: A, model: claude-haiku@vertex,  description: "cheap and fast; one-file edits, docs, config" }
+      - { label: B, model: claude-sonnet@vertex, description: "a typical feature in one module, with tests" }
+      - { label: C, model: claude-opus@vertex,   description: "multi-file or security-sensitive change, or round 2" }
+  reviewer-security: { engine: opencode,    model: gemini-pro@vertex, fallback: [claude-sonnet@vertex] }
+  reviewer-code:     { engine: claude_code, model: claude-haiku@vertex }
+  reviewer-ux:       { engine: direct,      model: claude-haiku@vertex }
+  reviewer-ui:       { engine: direct,      model: claude-haiku@vertex }
+  approver:          { engine: direct,      model: claude-sonnet@vertex }
+  judge:             { engine: direct,      model: gemini-flash@vertex, fallback: [gemini-lite@vertex] }
+  improver:          { engine: claude_code, model: claude-sonnet@vertex }

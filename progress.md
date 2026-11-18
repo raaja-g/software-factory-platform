@@ -4,7 +4,7 @@ Updated after every completed step.
 
 ## Now
 
-Building M1 (foundation). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
+M1 is done; starting M2 (the job loop with fake engines). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
 
 ## Plan revision (before coding)
 
@@ -17,19 +17,20 @@ Building M1 (foundation). M0's spikes wait for your gcloud/ADC login, Model Gard
 - [x] **2026-11-18** Checked the result and fixed the gaps.
 - [x] **2026-11-18** You asked to start building (Sonnet 5.5, fanned-out workflows), so the revised plan stands as approved.
 
-## M1 Foundation (in progress)
+## M1 Foundation (done)
 
 - [x] **2026-11-18** M1.1 Repo scaffold and domain types (uv project, `swfactory` package, CI workflow, 9 tests).
 - [x] **2026-11-18** M1.2 Settings and redacting logs (24 tests).
-- [ ] M1.3a factory.yaml models (partly written; its agent timed out, being re-run)
-- [ ] M1.3b Per-file models, validation, JSON Schema, default profiles
-- [ ] M1.4 Definition loader, `factory init`, `factory def validate`
-- [ ] M1.5a Postgres service, engine and test database fixtures (partly written; being re-run)
-- [ ] M1.5b Tables, migration, `factory db upgrade`
-- [ ] M1.6 Event bus
-- [ ] M1.7 Definition store, app sync
-- [ ] M1.8 Job queue
-- [ ] M1.8b Backlogs
+- [x] **2026-11-18** M1.3a factory.yaml models
+- [x] **2026-11-18** M1.3b Per-file models, validation, JSON Schema, default profiles
+- [x] **2026-11-18** M1.4 Definition loader, `factory init`, `factory def validate`
+- [x] **2026-11-18** M1.5a Postgres service, engine and test database fixtures
+- [x] **2026-11-18** M1.5b Tables, migration, `factory db upgrade`
+- [x] **2026-11-18** M1.6 Event bus
+- [x] **2026-11-18** M1.7 Definition store, app sync
+- [x] **2026-11-18** M1.8 Job queue
+- [x] **2026-11-18** M1.8b Backlogs
+- [x] **2026-11-18** M1 exit check run end to end: 126 default tests, 59 database tests, ruff and pyright clean.
 
 ## Milestones
 
@@ -38,7 +39,7 @@ Order for now: everything runs on your Mac. M0, then M1 to M8, then M10, M11 and
 | Milestone | Status |
 |---|---|
 | M0 Spikes | not started |
-| M1 Foundation | in progress |
+| M1 Foundation | done |
 | M2 Loop with fakes | not started |
 | M3 Roles, contracts, triage | not started |
 | M4 Sandboxes, verify gate, local git | not started |

@@ -1,0 +1,18 @@
+description: Strongest model for the builder; cheap Groq, OpenRouter or Flash-Lite models for reviewers
+continuity: fresh
+roles:
+  spec-writer: { engine: opencode, model: gemini-flash@vertex }
+  requirements: { engine: opencode, model: gemini-pro@vertex }
+  builder:
+    engine: opencode
+    model: claude-sonnet@vertex
+    mode: fixed
+    sticky: true
+    fallback: [gemini-pro@vertex]
+  reviewer-security: { engine: opencode, model: gemini-flash@vertex, fallback: [coder@openrouter] }
+  reviewer-code:     { engine: opencode, model: coder@groq, fallback: [gemini-lite@vertex] }
+  reviewer-ux:       { engine: direct,   model: gemini-lite@vertex }
+  reviewer-ui:       { engine: direct,   model: gemini-lite@vertex }
+  approver:          { engine: direct,   model: gemini-flash@vertex }
+  judge:             { engine: direct,   model: gemini-lite@vertex }
+  improver:          { engine: opencode, model: gemini-pro@vertex }

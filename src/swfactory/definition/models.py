@@ -1,8 +1,13 @@
 """factory/v1 models for ``factory.yaml``."""
 
+import ipaddress
+import json
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal
-from typing import Annotated, Literal
+from pathlib import Path, PurePosixPath
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -10,11 +15,21 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    ValidationError,
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import models_json_schema
 
-from swfactory.domain.types import DEFAULT_REVIEWERS, MergePolicy, TriageMode
+from swfactory.domain.types import (
+    DEFAULT_REVIEWERS,
+    FactoryMode,
+    MergePolicy,
+    Role,
+    SelectionMode,
+    TriageMode,
+)
+from swfactory.settings import Settings
 
 SLUG_PATTERN = r"^[a-z0-9][a-z0-9-]{0,39}$"
 Slug = Annotated[str, StringConstraints(pattern=SLUG_PATTERN)]
@@ -262,3 +277,388 @@ class FactoryConfig(StrictModel):
                     )
                 seen[scope] = rname
         return self
+
+
+# --------------------------------------------------------------------------
+# Per-file models
+# --------------------------------------------------------------------------
+
+PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+FACTORY_SERVICE_NAMES = frozenset(
+    {
+        "postgres",
+        "docker-proxy",
+        "gateway",
+        "gateway-edge",
+        "gateway-db",
+        "gateway-migrate",
+        "migrate",
+        "api",
+        "orchestrator",
+        "egress",
+        "router",
+        "phoenix",
+        "gateway-auth",
+        "pkg-mirror",
+        "pkg-mirror-pypi",
+        "pkg-mirror-auth",
+    }
+)
+
+_METADATA_HOSTS = frozenset({"metadata.google.internal", "metadata"})
+_LOOPBACK_HOSTS = frozenset({"localhost"})
+
+
+class Tier(StrictModel):
+    label: str = Field(pattern=r"^[A-Z]$")
+    model: str
+    description: str
+
+
+class RoleProfile(StrictModel):
+    engine: Literal["opencode", "claude_code", "gemini_cli", "direct", "fake"]
+    model: str
+    mode: SelectionMode = SelectionMode.FIXED
+    tiers: tuple[Tier, ...] = Field(default=(), max_length=6)
+    fallback: tuple[str, ...] = ()
+    sticky: bool | None = None
+    allow_experimental: bool = False
+
+
+class Profile(StrictModel):
+    description: str = ""
+    continuity: Literal["fresh", "resume"] = "fresh"
+    roles: dict[Role, RoleProfile]
+
+
+class RoleFile(StrictModel):
+    frontmatter: dict[str, Any] = {}
+    body: str = ""
+
+
+class RunnerDef(StrictModel):
+    image: str
+    cpus: float = 2.0
+    memory_mb: int = 4096
+    pids: int = 512
+    allowed_hosts: tuple[str, ...] = ()
+    setup_commands: tuple[str, ...] = ()
+
+
+class AutomationTrigger(StrictModel):
+    provider: str
+    event: str
+    filter: dict[str, Any] = {}
+
+
+class AutomationDef(StrictModel):
+    enabled: bool = True
+    trigger: AutomationTrigger
+    app: str
+    feature_template: str
+    profile: str | None = None
+
+
+class WebhookDef(StrictModel):
+    auth_mode: str
+    signature_scheme: Literal["github", "sentry", "standard_webhooks", "stripe"]
+    secret_env: str = Field(pattern=r"^WEBHOOK_[A-Z0-9_]+_SECRET$")
+    delivery_id_header: str
+
+
+class ScorerLabel(StrictModel):
+    value: str
+    score: float = Field(ge=0, le=1)
+    description: str
+
+
+class ScorerDef(StrictModel):
+    labels: tuple[ScorerLabel, ...] = Field(min_length=1, max_length=20)
+    passing_score: float = Field(ge=0, le=1)
+    sampling_rate: float = Field(default=0.10, ge=0, le=1)
+    judge: str
+    applies_to: tuple[str, ...] = ()
+    rubric: str = ""
+
+
+class BenchConfigDef(StrictModel):
+    name: str
+    profile: str
+
+
+class BenchTaskDef(StrictModel):
+    title: str
+    feature: str
+    success_criteria: tuple[str, ...] = ()
+    repo: str
+    base_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    merge_sha: str | None = None
+    definition_sha: str
+    hidden_checks: tuple[str, ...] = ()
+    check_command: str | None = None
+    scorers: tuple[str, ...] = ()
+
+
+class BenchSuiteDef(StrictModel):
+    description: str = ""
+    budget_usd: Decimal | None = None
+    max_parallel: int = 1
+    configurations: tuple[BenchConfigDef, ...] = Field(min_length=1, max_length=6)
+    tasks: dict[str, BenchTaskDef] = {}
+
+
+class Definition(StrictModel):
+    factory: FactoryConfig
+    profiles: dict[str, Profile] = {}
+    roles: dict[Role, RoleFile] = {}
+    runners: dict[str, RunnerDef] = {}
+    automations: dict[str, AutomationDef] = {}
+    webhooks: dict[str, WebhookDef] = {}
+    scorers: dict[str, ScorerDef] = {}
+    benchmarks: dict[str, BenchSuiteDef] = {}
+
+    def app(self, slug: str) -> AppDef:
+        return self.factory.apps[slug]
+
+
+# --------------------------------------------------------------------------
+# Policy and validation
+# --------------------------------------------------------------------------
+
+
+def _setting_default(name: str) -> tuple[str, ...]:
+    default = Settings.model_fields[name].default
+    return tuple(default)
+
+
+@dataclass(frozen=True)
+class DefinitionPolicy:
+    allowed_provider_hosts: frozenset[str] = frozenset(_setting_default("allowed_provider_hosts"))
+    allowed_image_prefixes: tuple[str, ...] = _setting_default("allowed_image_prefixes")
+    require_image_digest: bool = False
+    allowed_local_model_hosts: frozenset[str] = frozenset({"host.docker.internal"})
+    host_repos_root: str | None = None
+
+    def __post_init__(self) -> None:
+        if any(not h for h in self.allowed_provider_hosts):
+            raise ValueError("allowed_provider_hosts must not contain an empty host")
+        if any(not h for h in self.allowed_local_model_hosts):
+            raise ValueError("allowed_local_model_hosts must not contain an empty host")
+        for p in self.allowed_image_prefixes:
+            if not p or not p.endswith("/"):
+                raise ValueError(f"image prefix {p!r} must be non-empty and end with '/'")
+        if self.host_repos_root is not None and not self.host_repos_root.startswith("/"):
+            raise ValueError("host_repos_root must be an absolute path")
+
+    @classmethod
+    def from_settings(cls, s: Settings) -> "DefinitionPolicy":
+        return cls(
+            allowed_provider_hosts=frozenset(s.allowed_provider_hosts),
+            allowed_image_prefixes=tuple(s.allowed_image_prefixes),
+            require_image_digest=s.mode is FactoryMode.SERVER,
+            allowed_local_model_hosts=frozenset(s.allowed_local_model_hosts),
+            host_repos_root=s.host_repos_root,
+        )
+
+
+@dataclass(frozen=True)
+class DefinitionIssue:
+    loc: tuple[str | int, ...]
+    type: str
+    msg: str
+
+
+_REQUIRED_ROLES = (
+    Role.SPEC_WRITER,
+    Role.BUILDER,
+    Role.REVIEWER_SECURITY,
+    Role.REVIEWER_UX,
+    Role.REVIEWER_UI,
+    Role.REVIEWER_CODE,
+    Role.APPROVER,
+)
+
+_SHA256_SUFFIX = re.compile(r"@sha256:[0-9a-f]{64}$")
+
+
+def _base_url_problem(url: str, keyed: bool, policy: DefinitionPolicy) -> str | None:
+    host = (urlsplit(url).hostname or "").lower()
+    if not host:
+        return "base_url has no host"
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address | None
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if host in _METADATA_HOSTS or (ip is not None and ip.is_link_local):
+        return f"'{host}' is a metadata or link-local address"
+    if host in _LOOPBACK_HOSTS or (ip is not None and (ip.is_loopback or ip.is_unspecified)):
+        return f"'{host}' is a loopback or unspecified address"
+    if host in FACTORY_SERVICE_NAMES:
+        return f"'{host}' is a factory service"
+    scheme = urlsplit(url).scheme
+    if keyed:
+        if scheme != "https":
+            return "a provider with an API key must use https"
+        if host not in policy.allowed_provider_hosts:
+            return f"'{host}' is not in FACTORY_ALLOWED_PROVIDER_HOSTS"
+        return None
+    if host in policy.allowed_local_model_hosts:
+        return None
+    if scheme == "https" and host in policy.allowed_provider_hosts:
+        return None
+    return f"'{host}' is not in FACTORY_ALLOWED_LOCAL_MODEL_HOSTS"
+
+
+def check_references(defn: Definition, policy: DefinitionPolicy) -> tuple[DefinitionIssue, ...]:
+    out: list[DefinitionIssue] = []
+
+    def ref(loc: tuple[str | int, ...], msg: str) -> None:
+        out.append(DefinitionIssue(loc, "definition_ref", msg))
+
+    f = defn.factory
+
+    def check_profile(loc: tuple[str | int, ...], name: str | None) -> None:
+        if name is not None and name not in defn.profiles:
+            ref(loc, f"unknown profile '{name}'")
+
+    def check_model(loc: tuple[str | int, ...], alias: str) -> None:
+        if alias not in f.models:
+            ref(loc, f"unknown model alias '{alias}'")
+
+    for pname in defn.profiles:
+        if not PROFILE_NAME_RE.match(pname):
+            ref(("profiles", pname), f"profile name '{pname}' must match {PROFILE_NAME_RE.pattern}")
+
+    check_profile(("factory", "defaults", "profile"), f.defaults.profile)
+
+    for pname, prov in f.providers.items():
+        if prov.base_url is not None:
+            problem = _base_url_problem(prov.base_url, prov.api_key_env is not None, policy)
+            if problem:
+                ref(("factory", "providers", pname, "base_url"), problem)
+
+    for alias, m in f.models.items():
+        if m.provider not in f.providers:
+            ref(("factory", "models", alias, "provider"), f"unknown provider '{m.provider}'")
+
+    for slug, app in f.apps.items():
+        base = ("factory", "apps", slug)
+        check_profile((*base, "profile"), app.profile)
+        for i, name in enumerate(app.allowed_profiles):
+            check_profile((*base, "allowed_profiles", i), name)
+        if app.runner not in defn.runners:
+            ref((*base, "runner"), f"unknown runner '{app.runner}'")
+        for i, reg in enumerate(app.registries):
+            if reg not in f.registries:
+                ref((*base, "registries", i), f"unknown registry '{reg}'")
+        bad = [r for r in app.reviewers if r not in DEFAULT_REVIEWERS]
+        if bad:
+            ref((*base, "reviewers"), f"unknown reviewer {bad[0]!r}; allowed: {DEFAULT_REVIEWERS}")
+        elif app.sensitive and "security" not in app.reviewers:
+            ref((*base, "reviewers"), "a sensitive app must keep the security reviewer")
+        root = policy.host_repos_root
+        if root is not None and app.local_path is not None:
+            rparts = PurePosixPath(root).parts
+            if PurePosixPath(app.local_path).parts[: len(rparts)] != rparts:
+                ref(
+                    (*base, "local_path"),
+                    f"local_path '{app.local_path}' is not inside FACTORY_HOST_REPOS_ROOT",
+                )
+
+    for i, rule in enumerate(f.triage.rules):
+        check_profile(("factory", "triage", "rules", i, "profile"), rule.profile)
+
+    for pname, prof in defn.profiles.items():
+        for role, rp in prof.roles.items():
+            base = ("profiles", pname, "roles", role.value)
+            check_model((*base, "model"), rp.model)
+            for i, t in enumerate(rp.tiers):
+                check_model((*base, "tiers", i, "model"), t.model)
+            for i, fb in enumerate(rp.fallback):
+                check_model((*base, "fallback", i), fb)
+        for role in _REQUIRED_ROLES:
+            if role not in prof.roles:
+                ref(("profiles", pname, "roles"), f"profile '{pname}' has no {role.value}")
+
+    for rname, runner in defn.runners.items():
+        loc = ("runners", rname, "image")
+        if not any(runner.image.startswith(p) for p in policy.allowed_image_prefixes):
+            ref(loc, f"image '{runner.image}' is not under an allowed image prefix")
+        elif policy.require_image_digest and not _SHA256_SUFFIX.search(runner.image):
+            ref(loc, f"image '{runner.image}' must be pinned by @sha256 digest")
+
+    for aname, auto in defn.automations.items():
+        check_profile(("automations", aname, "profile"), auto.profile)
+        if auto.app not in f.apps:
+            ref(("automations", aname, "app"), f"unknown app '{auto.app}'")
+
+    for sname, sc in defn.scorers.items():
+        check_model(("scorers", sname, "judge"), sc.judge)
+        scores = [lb.score for lb in sc.labels]
+        if not any(x < sc.passing_score for x in scores):
+            ref(
+                ("scorers", sname, "labels"),
+                f"no label scores below passing_score {sc.passing_score}",
+            )
+        elif not any(x >= sc.passing_score for x in scores):
+            ref(
+                ("scorers", sname, "labels"),
+                f"no label reaches passing_score {sc.passing_score}",
+            )
+
+    for bname, suite in defn.benchmarks.items():
+        for i, cfg in enumerate(suite.configurations):
+            check_profile(("benchmarks", bname, "configurations", i, "profile"), cfg.profile)
+
+    return tuple(out)
+
+
+def validate_definition(
+    data: Mapping[str, Any], policy: DefinitionPolicy | None = None
+) -> tuple[Definition | None, tuple[DefinitionIssue, ...]]:
+    policy = policy or DefinitionPolicy()
+    try:
+        defn = Definition.model_validate(data)
+    except ValidationError as e:
+        return None, tuple(
+            DefinitionIssue(tuple(err["loc"]), err["type"], err["msg"]) for err in e.errors()
+        )
+    issues = check_references(defn, policy)
+    return defn, issues
+
+
+# --------------------------------------------------------------------------
+# JSON Schema
+# --------------------------------------------------------------------------
+
+
+def definition_json_schema() -> dict[str, Any]:
+    models = [
+        FactoryConfig,
+        Profile,
+        RoleFile,
+        RunnerDef,
+        AutomationDef,
+        WebhookDef,
+        ScorerDef,
+        BenchSuiteDef,
+    ]
+    _, schema = models_json_schema([(m, "validation") for m in models], by_alias=True)
+    defs: dict[str, Any] = schema["$defs"]
+    root = dict(defs.pop("FactoryConfig"))
+    root["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    root["$defs"] = defs
+    return root
+
+
+def write_schema(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(definition_json_schema(), indent=2, sort_keys=True) + "\n")
+
+
+if __name__ == "__main__":
+    write_schema(Path("schema/definition.schema.json"))

@@ -1,0 +1,12 @@
+description: LM Studio / Ollama on the host, for experiments only
+continuity: fresh
+roles:
+  spec-writer:       { engine: opencode, model: local@ollama }
+  requirements:      { engine: opencode, model: local@ollama }
+  builder:           { engine: opencode, model: local@ollama }
+  reviewer-security: { engine: opencode, model: local@ollama }
+  reviewer-code:     { engine: opencode, model: local@ollama }
+  reviewer-ux:       { engine: direct,   model: local@ollama }
+  reviewer-ui:       { engine: direct,   model: local@ollama }
+  approver:          { engine: direct,   model: local@ollama }
+  judge:             { engine: direct,   model: local@ollama }

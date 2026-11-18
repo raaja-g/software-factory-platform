@@ -1,1 +1,1398 @@
-{}
+{
+  "$defs": {
+    "AppDef": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_profiles": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Profiles",
+          "type": "array"
+        },
+        "budget_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Budget Usd"
+        },
+        "concurrency": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Concurrency"
+        },
+        "default_branch": {
+          "default": "main",
+          "title": "Default Branch",
+          "type": "string"
+        },
+        "local_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Local Path"
+        },
+        "max_fix_attempts": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Fix Attempts"
+        },
+        "max_rounds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Rounds"
+        },
+        "merge_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MergePolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile"
+        },
+        "protected_paths": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Protected Paths",
+          "type": "array"
+        },
+        "registries": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Registries",
+          "type": "array"
+        },
+        "repo_kind": {
+          "enum": [
+            "github",
+            "local"
+          ],
+          "title": "Repo Kind",
+          "type": "string"
+        },
+        "repo_url": {
+          "title": "Repo Url",
+          "type": "string"
+        },
+        "reviewers": {
+          "default": [
+            "security",
+            "ux",
+            "ui",
+            "code"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Reviewers",
+          "type": "array"
+        },
+        "runner": {
+          "default": "standard",
+          "title": "Runner",
+          "type": "string"
+        },
+        "sensitive": {
+          "default": false,
+          "title": "Sensitive",
+          "type": "boolean"
+        },
+        "test_command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Test Command"
+        },
+        "ui_globs": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Ui Globs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "repo_kind",
+        "repo_url"
+      ],
+      "title": "AppDef",
+      "type": "object"
+    },
+    "AutomationDef": {
+      "additionalProperties": false,
+      "properties": {
+        "app": {
+          "title": "App",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "feature_template": {
+          "title": "Feature Template",
+          "type": "string"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile"
+        },
+        "trigger": {
+          "$ref": "#/$defs/AutomationTrigger"
+        }
+      },
+      "required": [
+        "trigger",
+        "app",
+        "feature_template"
+      ],
+      "title": "AutomationDef",
+      "type": "object"
+    },
+    "AutomationTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "title": "Event",
+          "type": "string"
+        },
+        "filter": {
+          "additionalProperties": true,
+          "default": {},
+          "title": "Filter",
+          "type": "object"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "event"
+      ],
+      "title": "AutomationTrigger",
+      "type": "object"
+    },
+    "BenchConfigDef": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "profile": {
+          "title": "Profile",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "profile"
+      ],
+      "title": "BenchConfigDef",
+      "type": "object"
+    },
+    "BenchSuiteDef": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Budget Usd"
+        },
+        "configurations": {
+          "items": {
+            "$ref": "#/$defs/BenchConfigDef"
+          },
+          "maxItems": 6,
+          "minItems": 1,
+          "title": "Configurations",
+          "type": "array"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "max_parallel": {
+          "default": 1,
+          "title": "Max Parallel",
+          "type": "integer"
+        },
+        "tasks": {
+          "additionalProperties": {
+            "$ref": "#/$defs/BenchTaskDef"
+          },
+          "default": {},
+          "title": "Tasks",
+          "type": "object"
+        }
+      },
+      "required": [
+        "configurations"
+      ],
+      "title": "BenchSuiteDef",
+      "type": "object"
+    },
+    "BenchTaskDef": {
+      "additionalProperties": false,
+      "properties": {
+        "base_sha": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Base Sha",
+          "type": "string"
+        },
+        "check_command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Check Command"
+        },
+        "definition_sha": {
+          "title": "Definition Sha",
+          "type": "string"
+        },
+        "feature": {
+          "title": "Feature",
+          "type": "string"
+        },
+        "hidden_checks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Hidden Checks",
+          "type": "array"
+        },
+        "merge_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Merge Sha"
+        },
+        "repo": {
+          "title": "Repo",
+          "type": "string"
+        },
+        "scorers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Scorers",
+          "type": "array"
+        },
+        "success_criteria": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Success Criteria",
+          "type": "array"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "feature",
+        "repo",
+        "base_sha",
+        "definition_sha"
+      ],
+      "title": "BenchTaskDef",
+      "type": "object"
+    },
+    "Budgets": {
+      "additionalProperties": false,
+      "properties": {
+        "daily_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "default": "150",
+          "title": "Daily Usd"
+        },
+        "job_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "default": "10",
+          "title": "Job Usd"
+        }
+      },
+      "title": "Budgets",
+      "type": "object"
+    },
+    "Concurrency": {
+      "additionalProperties": false,
+      "properties": {
+        "global": {
+          "default": 2,
+          "title": "Global",
+          "type": "integer"
+        },
+        "per_app": {
+          "default": 1,
+          "title": "Per App",
+          "type": "integer"
+        }
+      },
+      "title": "Concurrency",
+      "type": "object"
+    },
+    "Defaults": {
+      "additionalProperties": false,
+      "properties": {
+        "contract_repair_attempts": {
+          "default": 1,
+          "title": "Contract Repair Attempts",
+          "type": "integer"
+        },
+        "definition_poll_s": {
+          "default": 300,
+          "title": "Definition Poll S",
+          "type": "integer"
+        },
+        "engine_retries": {
+          "default": 2,
+          "title": "Engine Retries",
+          "type": "integer"
+        },
+        "engine_retry_backoff_s": {
+          "default": [
+            10,
+            60
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Engine Retry Backoff S",
+          "type": "array"
+        },
+        "judge_sampling": {
+          "default": 0.1,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Judge Sampling",
+          "type": "number"
+        },
+        "lease_renew_s": {
+          "default": 30,
+          "title": "Lease Renew S",
+          "type": "integer"
+        },
+        "lease_s": {
+          "default": 90,
+          "title": "Lease S",
+          "type": "integer"
+        },
+        "max_backlog_items": {
+          "default": 30,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Backlog Items",
+          "type": "integer"
+        },
+        "max_fix_attempts": {
+          "default": 1,
+          "title": "Max Fix Attempts",
+          "type": "integer"
+        },
+        "max_rounds": {
+          "default": 2,
+          "title": "Max Rounds",
+          "type": "integer"
+        },
+        "profile": {
+          "default": "team-gemini",
+          "title": "Profile",
+          "type": "string"
+        },
+        "router_timeout_s": {
+          "default": 2,
+          "title": "Router Timeout S",
+          "type": "integer"
+        },
+        "step_timeouts_min": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Step Timeouts Min",
+          "type": "object"
+        }
+      },
+      "title": "Defaults",
+      "type": "object"
+    },
+    "ImproverConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "bench_suite": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bench Suite"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "failed_run_threshold": {
+          "default": 25,
+          "title": "Failed Run Threshold",
+          "type": "integer"
+        },
+        "max_failure_age_days": {
+          "default": 7,
+          "title": "Max Failure Age Days",
+          "type": "integer"
+        }
+      },
+      "title": "ImproverConfig",
+      "type": "object"
+    },
+    "MergePolicy": {
+      "enum": [
+        "local_merge",
+        "pr_manual",
+        "pr_auto_merge"
+      ],
+      "title": "MergePolicy",
+      "type": "string"
+    },
+    "ModelAliasDef": {
+      "additionalProperties": false,
+      "properties": {
+        "context_window": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Window"
+        },
+        "price_in_per_mtok": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price In Per Mtok"
+        },
+        "price_out_per_mtok": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Price Out Per Mtok"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "strength": {
+          "enum": [
+            "strong",
+            "mid",
+            "cheap",
+            "local"
+          ],
+          "title": "Strength",
+          "type": "string"
+        },
+        "upstream_id": {
+          "title": "Upstream Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "upstream_id",
+        "strength"
+      ],
+      "title": "ModelAliasDef",
+      "type": "object"
+    },
+    "Profile": {
+      "additionalProperties": false,
+      "properties": {
+        "continuity": {
+          "default": "fresh",
+          "enum": [
+            "fresh",
+            "resume"
+          ],
+          "title": "Continuity",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "roles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RoleProfile"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/Role"
+          },
+          "title": "Roles",
+          "type": "object"
+        }
+      },
+      "required": [
+        "roles"
+      ],
+      "title": "Profile",
+      "type": "object"
+    },
+    "ProviderDef": {
+      "additionalProperties": false,
+      "properties": {
+        "api_key_env": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Api Key Env"
+        },
+        "base_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Url"
+        },
+        "kind": {
+          "enum": [
+            "vertex_ai",
+            "gemini",
+            "groq",
+            "openrouter",
+            "lm_studio",
+            "ollama",
+            "openai_compatible",
+            "anthropic_compatible"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Location"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project"
+        },
+        "project_env": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Env"
+        },
+        "subscription_backed": {
+          "default": false,
+          "title": "Subscription Backed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "ProviderDef",
+      "type": "object"
+    },
+    "RegistryDef": {
+      "additionalProperties": false,
+      "properties": {
+        "credential": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Credential"
+        },
+        "kind": {
+          "enum": [
+            "npm",
+            "pypi"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "scopes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Scopes",
+          "type": "array"
+        },
+        "upstream": {
+          "enum": [
+            "artifact_registry",
+            "github_packages",
+            "token"
+          ],
+          "title": "Upstream",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "upstream",
+        "url"
+      ],
+      "title": "RegistryDef",
+      "type": "object"
+    },
+    "Role": {
+      "enum": [
+        "triage",
+        "requirements",
+        "spec-writer",
+        "builder",
+        "reviewer-security",
+        "reviewer-ux",
+        "reviewer-ui",
+        "reviewer-code",
+        "approver",
+        "judge",
+        "improver"
+      ],
+      "title": "Role",
+      "type": "string"
+    },
+    "RoleFile": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "default": "",
+          "title": "Body",
+          "type": "string"
+        },
+        "frontmatter": {
+          "additionalProperties": true,
+          "default": {},
+          "title": "Frontmatter",
+          "type": "object"
+        }
+      },
+      "title": "RoleFile",
+      "type": "object"
+    },
+    "RoleProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_experimental": {
+          "default": false,
+          "title": "Allow Experimental",
+          "type": "boolean"
+        },
+        "engine": {
+          "enum": [
+            "opencode",
+            "claude_code",
+            "gemini_cli",
+            "direct",
+            "fake"
+          ],
+          "title": "Engine",
+          "type": "string"
+        },
+        "fallback": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Fallback",
+          "type": "array"
+        },
+        "mode": {
+          "$ref": "#/$defs/SelectionMode",
+          "default": "fixed"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "sticky": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sticky"
+        },
+        "tiers": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Tier"
+          },
+          "maxItems": 6,
+          "title": "Tiers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "engine",
+        "model"
+      ],
+      "title": "RoleProfile",
+      "type": "object"
+    },
+    "RunnerDef": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_hosts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Hosts",
+          "type": "array"
+        },
+        "cpus": {
+          "default": 2.0,
+          "title": "Cpus",
+          "type": "number"
+        },
+        "image": {
+          "title": "Image",
+          "type": "string"
+        },
+        "memory_mb": {
+          "default": 4096,
+          "title": "Memory Mb",
+          "type": "integer"
+        },
+        "pids": {
+          "default": 512,
+          "title": "Pids",
+          "type": "integer"
+        },
+        "setup_commands": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Setup Commands",
+          "type": "array"
+        }
+      },
+      "required": [
+        "image"
+      ],
+      "title": "RunnerDef",
+      "type": "object"
+    },
+    "ScorerDef": {
+      "additionalProperties": false,
+      "properties": {
+        "applies_to": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Applies To",
+          "type": "array"
+        },
+        "judge": {
+          "title": "Judge",
+          "type": "string"
+        },
+        "labels": {
+          "items": {
+            "$ref": "#/$defs/ScorerLabel"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Labels",
+          "type": "array"
+        },
+        "passing_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Passing Score",
+          "type": "number"
+        },
+        "rubric": {
+          "default": "",
+          "title": "Rubric",
+          "type": "string"
+        },
+        "sampling_rate": {
+          "default": 0.1,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Sampling Rate",
+          "type": "number"
+        }
+      },
+      "required": [
+        "labels",
+        "passing_score",
+        "judge"
+      ],
+      "title": "ScorerDef",
+      "type": "object"
+    },
+    "ScorerLabel": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        },
+        "value": {
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "score",
+        "description"
+      ],
+      "title": "ScorerLabel",
+      "type": "object"
+    },
+    "SelectionMode": {
+      "enum": [
+        "fixed",
+        "shadow",
+        "laya"
+      ],
+      "title": "SelectionMode",
+      "type": "string"
+    },
+    "Tier": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "label": {
+          "pattern": "^[A-Z]$",
+          "title": "Label",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "model",
+        "description"
+      ],
+      "title": "Tier",
+      "type": "object"
+    },
+    "TriageConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/TriageMode",
+          "default": "rules"
+        },
+        "rules": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TriageRule"
+          },
+          "title": "Rules",
+          "type": "array"
+        }
+      },
+      "title": "TriageConfig",
+      "type": "object"
+    },
+    "TriageMatch": {
+      "additionalProperties": false,
+      "properties": {
+        "globs": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Globs",
+          "type": "array"
+        },
+        "keywords": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Keywords",
+          "type": "array"
+        },
+        "labels": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Labels",
+          "type": "array"
+        }
+      },
+      "title": "TriageMatch",
+      "type": "object"
+    },
+    "TriageMode": {
+      "enum": [
+        "rules",
+        "shadow",
+        "laya",
+        "llm"
+      ],
+      "title": "TriageMode",
+      "type": "string"
+    },
+    "TriageRule": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Budget Usd"
+        },
+        "match": {
+          "$ref": "#/$defs/TriageMatch",
+          "default": {
+            "globs": [],
+            "keywords": [],
+            "labels": []
+          }
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile"
+        },
+        "require_human_approval": {
+          "default": false,
+          "title": "Require Human Approval",
+          "type": "boolean"
+        },
+        "reviewers": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewers"
+        },
+        "set": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "default": {},
+          "propertyNames": {
+            "enum": [
+              "kind",
+              "size",
+              "risk",
+              "touches_ui"
+            ]
+          },
+          "title": "Set",
+          "type": "object"
+        }
+      },
+      "title": "TriageRule",
+      "type": "object"
+    },
+    "WebhookDef": {
+      "additionalProperties": false,
+      "properties": {
+        "auth_mode": {
+          "title": "Auth Mode",
+          "type": "string"
+        },
+        "delivery_id_header": {
+          "title": "Delivery Id Header",
+          "type": "string"
+        },
+        "secret_env": {
+          "pattern": "^WEBHOOK_[A-Z0-9_]+_SECRET$",
+          "title": "Secret Env",
+          "type": "string"
+        },
+        "signature_scheme": {
+          "enum": [
+            "github",
+            "sentry",
+            "standard_webhooks",
+            "stripe"
+          ],
+          "title": "Signature Scheme",
+          "type": "string"
+        }
+      },
+      "required": [
+        "auth_mode",
+        "signature_scheme",
+        "secret_env",
+        "delivery_id_header"
+      ],
+      "title": "WebhookDef",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apps": {
+      "patternProperties": {
+        "^[a-z0-9][a-z0-9-]{0,39}$": {
+          "$ref": "#/$defs/AppDef"
+        }
+      },
+      "title": "Apps",
+      "type": "object"
+    },
+    "budgets": {
+      "$ref": "#/$defs/Budgets",
+      "default": {
+        "daily_usd": "150",
+        "job_usd": "10"
+      }
+    },
+    "concurrency": {
+      "$ref": "#/$defs/Concurrency",
+      "default": {
+        "global": 2,
+        "per_app": 1
+      }
+    },
+    "defaults": {
+      "$ref": "#/$defs/Defaults",
+      "default": {
+        "contract_repair_attempts": 1,
+        "definition_poll_s": 300,
+        "engine_retries": 2,
+        "engine_retry_backoff_s": [
+          10,
+          60
+        ],
+        "judge_sampling": 0.1,
+        "lease_renew_s": 30,
+        "lease_s": 90,
+        "max_backlog_items": 30,
+        "max_fix_attempts": 1,
+        "max_rounds": 2,
+        "profile": "team-gemini",
+        "router_timeout_s": 2,
+        "step_timeouts_min": {
+          "approve": 10,
+          "build": 60,
+          "improve": 60,
+          "judge": 5,
+          "requirements": 20,
+          "review": 20,
+          "spec": 15,
+          "triage": 1,
+          "verify": 15
+        }
+      }
+    },
+    "improver": {
+      "$ref": "#/$defs/ImproverConfig",
+      "default": {
+        "bench_suite": null,
+        "enabled": false,
+        "failed_run_threshold": 25,
+        "max_failure_age_days": 7
+      }
+    },
+    "models": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ModelAliasDef"
+      },
+      "title": "Models",
+      "type": "object"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "providers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ProviderDef"
+      },
+      "title": "Providers",
+      "type": "object"
+    },
+    "registries": {
+      "default": {},
+      "patternProperties": {
+        "^[a-z0-9][a-z0-9-]{0,39}$": {
+          "$ref": "#/$defs/RegistryDef"
+        }
+      },
+      "title": "Registries",
+      "type": "object"
+    },
+    "schemaVersion": {
+      "const": "factory/v1",
+      "title": "Schemaversion",
+      "type": "string"
+    },
+    "triage": {
+      "$ref": "#/$defs/TriageConfig",
+      "default": {
+        "mode": "rules",
+        "rules": []
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "name",
+    "providers",
+    "models",
+    "apps"
+  ],
+  "title": "FactoryConfig",
+  "type": "object"
+}
