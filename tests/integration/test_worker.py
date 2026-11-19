@@ -481,11 +481,6 @@ async def test_definition_activated_mid_job_does_not_change_running_job(tmp_path
     assert gate_box.exec_timeouts[gate_box.exec_calls.index(["bash", "-lc", "make test"])] == 900
 
 
-def test_cli_worker_needs_a_fake_script():
-    r = CliRunner().invoke(app, ["worker"])
-    assert r.exit_code == 2 and "no engines yet: pass --fake-script" in r.output
-
-
 def test_cli_worker_rejects_short_lease():
     r = CliRunner().invoke(
         app,

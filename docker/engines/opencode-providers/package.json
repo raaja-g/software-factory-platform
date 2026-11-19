@@ -1,0 +1,10 @@
+{
+  "name": "factory-opencode-providers",
+  "version": "0.0.0",
+  "private": true,
+  "description": "OpenCode provider packages pre-installed so runs need no network",
+  "dependencies": {
+    "@ai-sdk/anthropic": "4.0.106",
+    "@ai-sdk/openai-compatible": "3.0.93"
+  }
+}

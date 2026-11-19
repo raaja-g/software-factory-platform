@@ -110,30 +110,71 @@ def build_worker_deps(
     fake_script: Path | None,
     fake_git_state: Path | None = None,
 ) -> Deps:
-    """The worker's dependency bundle. Fakes for now: real engines arrive in M6."""
-    if fake_script is None:
-        raise ValueError("no engines yet: pass --fake-script (real engines arrive in M6)")
-    register_engine(FakeEngine(FakeScript.from_yaml(fake_script)))
+    """The worker's dependency bundle: fakes with a fake script, real engines without."""
     definitions = DefinitionStore(sessions, mode=settings.mode)
     from swfactory.costs.budgets import BudgetService
-    from swfactory.engines.fake import FakeRunGateway, FakeSelector
+    from swfactory.gateway.client import GatewayClient
     from swfactory.models.catalog import Catalog
 
+    artifacts = ArtifactStore(sessions, settings.artifacts_dir)
+    events = EventBus(sessions, settings.libpq_dsn())
+    if fake_script is None:
+        import docker
+
+        from swfactory.engines.registry import register_engines
+        from swfactory.gitops.folder import FolderRepo
+        from swfactory.gitops.local import LocalGit
+        from swfactory.gitops.service import GitDispatcher
+        from swfactory.models.selection import ModelSelector
+        from swfactory.sandbox.docker import DockerSandboxProvider
+
+        register_engines(settings)
+        real_gateway = GatewayClient(
+            settings.gateway_url, settings.gateway_master_key.get_secret_value()
+        )
+        real_catalog = Catalog(sessions, real_gateway, definitions)
+        return Deps(
+            sessions=sessions,
+            events=events,
+            artifacts=artifacts,
+            sandboxes=DockerSandboxProvider(  # pyright: ignore[reportArgumentType]
+                lambda: docker.DockerClient(base_url=settings.docker_host),
+                output_max_bytes=settings.exec_output_max_bytes,
+            ),
+            selector=ModelSelector(sessions, real_catalog, events),
+            catalog=real_catalog,
+            gateway=real_gateway,
+            budgets=BudgetService(sessions, definitions),
+            git=GitDispatcher(
+                {
+                    "local": LocalGit(
+                        Path(settings.repos_dir),
+                        max_bundle_mb=settings.max_bundle_mb,
+                        folders=FolderRepo.from_settings(settings),
+                    )
+                }
+            ),
+            roles=RoleLibrary(),
+            triage=TriageService(definitions, artifacts),
+            definitions=definitions,
+            scoring=unavailable("scoring", "M10"),
+            settings=settings,
+        )
+    register_engine(FakeEngine(FakeScript.from_yaml(fake_script)))
+    from swfactory.engines.fake import FakeRunGateway, FakeSelector
+
     catalog: Any = Catalog(sessions, None, definitions)
-    # the fake engine mints and spends nothing: run keys stay in-process until M6's engines
+    # the fake engine mints and spends nothing: run keys stay in-process
     gateway: Any = FakeRunGateway()
     gateway_url = getattr(settings, "gateway_url", None)
     master_key = getattr(settings, "gateway_master_key", None)
     if gateway_url and master_key is not None:
-        from swfactory.gateway.client import GatewayClient
-
         catalog = Catalog(
             sessions, GatewayClient(gateway_url, master_key.get_secret_value()), definitions
         )
-    artifacts = ArtifactStore(sessions, settings.artifacts_dir)
     return Deps(
         sessions=sessions,
-        events=EventBus(sessions, settings.libpq_dsn()),
+        events=events,
         artifacts=artifacts,
         sandboxes=FakeSandboxProvider(),  # pyright: ignore[reportArgumentType]
         selector=FakeSelector(sessions),

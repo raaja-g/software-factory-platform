@@ -1,0 +1,12 @@
+description: E2E, OpenCode on Gemini Flash-Lite (cheapest aliases)
+continuity: fresh
+roles:
+  spec-writer:       { engine: opencode, model: gemini-lite@vertex }
+  requirements:      { engine: opencode, model: gemini-lite@vertex }
+  builder:           { engine: opencode, model: gemini-lite@vertex, mode: fixed, sticky: true }
+  reviewer-security: { engine: opencode, model: gemini-lite@vertex }
+  reviewer-code:     { engine: opencode, model: gemini-lite@vertex }
+  reviewer-ux:       { engine: direct,   model: gemini-lite@vertex }
+  reviewer-ui:       { engine: direct,   model: gemini-lite@vertex }
+  approver:          { engine: direct,   model: gemini-lite@vertex }
+  judge:             { engine: direct,   model: gemini-lite@vertex }

@@ -1,0 +1,4 @@
+{
+  "session_id": "6f1c2a9e-0b7d-4c53-9a41-2d8e5b7a1c34",
+  "error": {"type": "ApiError", "message": "got status: 429 Too Many Requests. {\"error\":{\"code\":429,\"message\":\"Quota exceeded for aiplatform.googleapis.com\",\"status\":\"RESOURCE_EXHAUSTED\"}}", "code": 429}
+}

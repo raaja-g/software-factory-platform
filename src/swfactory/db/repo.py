@@ -109,6 +109,8 @@ async def start_agent_run(
         )
     )
     attempt = (last or 0) + 1
+    if decision_id is not None and await s.get(ModelDecision, decision_id) is None:
+        decision_id = None  # a choice made outside selection has no decision row to link
     row = AgentRun(
         job_id=job_id,
         role=str(role),

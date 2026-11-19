@@ -1,6 +1,6 @@
 import time
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -8,6 +8,7 @@ import pytest
 from swfactory.domain.types import AgentTask, EngineSupport, ModelRef, Role, RunStatus, ToolPolicy
 from swfactory.engines.fake import FakeEngine, FakeEngineError, FakeScript
 from swfactory.engines.registry import get_engine, register_engine
+from swfactory.sandbox.base import Sandbox
 
 OUT = "/work/.factory/out/r.md"
 
@@ -53,31 +54,31 @@ def fe(turns: list[dict[str, Any]]) -> FakeEngine:
 
 
 @pytest.fixture
-def box() -> Box:
-    return Box()
+def box() -> Sandbox:
+    return cast(Sandbox, Box())
 
 
-async def test_scripted_turn_writes_output_file(box: Box):
+async def test_scripted_turn_writes_output_file(box: Sandbox):
     e = fe([{"role": "reviewer-security", "round": 1, "output": "VERDICT: CHANGES\nfix x"}])
     r = await e.run(task(Role.REVIEWER_SECURITY), box)
     assert r.status == RunStatus.OK and (await box.read_text(OUT)) == "VERDICT: CHANGES\nfix x"
 
 
-async def test_role_defaults(box: Box):
+async def test_role_defaults(box: Sandbox):
     e = fe([])
     assert "## Acceptance criteria\n- [ ] " in (await e.run(task(Role.SPEC_WRITER), box)).output  # type: ignore[operator]
     assert (await e.run(task(Role.REVIEWER_UX), box)).output.startswith("VERDICT: PASS")  # type: ignore[union-attr]
     assert (await e.run(task(Role.APPROVER), box)).output.startswith("APPROVE")  # type: ignore[union-attr]
 
 
-async def test_attempt_scoped_raise(box: Box):
+async def test_attempt_scoped_raise(box: Sandbox):
     e = fe([{"role": "reviewer-ux", "round": 1, "attempt": 1, "raise": "boom"}])
     with pytest.raises(FakeEngineError, match="boom"):
         await e.run(task(Role.REVIEWER_UX, attempt=1), box)
     assert (await e.run(task(Role.REVIEWER_UX, attempt=2), box)).output.startswith("VERDICT: PASS")  # type: ignore[union-attr]
 
 
-async def test_latency_and_timeout(box: Box):
+async def test_latency_and_timeout(box: Sandbox):
     e = fe(
         [
             {"role": "builder", "round": 1, "latency_s": 0.05},
@@ -91,7 +92,7 @@ async def test_latency_and_timeout(box: Box):
     assert (r.status, r.output) == (RunStatus.TIMEOUT, None)
 
 
-async def test_reports_fake_identity(box: Box):
+async def test_reports_fake_identity(box: Sandbox):
     e = fe([])
     r = await e.run(task(Role.BUILDER), box)
     assert (r.used_models, r.engine_version, e.support_for(object())) == (
@@ -102,7 +103,7 @@ async def test_reports_fake_identity(box: Box):
     assert e.tasks == [task(Role.BUILDER)]
 
 
-async def test_scripted_used_models_and_error_class(box: Box):
+async def test_scripted_used_models_and_error_class(box: Sandbox):
     r = await fe([{"role": "builder", "round": 1, "used_models": ["fake", "other"]}]).run(
         task(Role.BUILDER), box
     )

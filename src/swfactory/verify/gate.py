@@ -5,7 +5,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -29,6 +29,7 @@ REASON_NOT_ON_BASE = "branch does not contain the default branch"
 _COMMAND_RE = re.compile(
     r"^[\s>*_-]*test command[\s*_]*:[\s*_]*`?([^`\n]+)`?", re.IGNORECASE | re.MULTILINE
 )
+_DEFAULT_TRAILERS = {"Factory-Role": "builder"}
 _DIFF_PATH = f"{OUT}/diff.patch"
 
 
@@ -129,6 +130,7 @@ class VerifyGate:
         attempt: int,
         setup: Sequence[str] = (),
         test_timeout_s: int = TEST_TIMEOUT_S,
+        trailers: Mapping[str, str] | None = None,
     ) -> GateResult:
         ref = f"refs/heads/{job.branch}"
         sym = await _git(box, "symbolic-ref", "HEAD")
@@ -147,8 +149,7 @@ class VerifyGate:
                 "-q",
                 "-m",
                 "factory: builder changes",
-                "-m",
-                "Factory-Role: builder",
+                *[f"--trailer={k}: {v}" for k, v in (trailers or _DEFAULT_TRAILERS).items()],
             )
         if not await self.git.rebase(job, app, box):
             return await self._early(job, round, attempt, REASON_REBASE_CONFLICT)

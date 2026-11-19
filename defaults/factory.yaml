@@ -4,6 +4,7 @@ name: factory
 defaults:
   profile: team-gemini
   max_rounds: 2
+  builder_continuity: fresh
   max_fix_attempts: 1
   max_backlog_items: 30
   judge_sampling: 0.10

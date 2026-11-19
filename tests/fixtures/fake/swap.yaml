@@ -1,0 +1,5 @@
+turns:
+  - role: reviewer-code
+    round: 1
+    output: "VERDICT: PASS\nfine"
+    used_models: [gemini-3.5-flash-lite]

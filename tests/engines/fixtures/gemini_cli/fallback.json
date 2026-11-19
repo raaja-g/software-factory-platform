@@ -1,0 +1,16 @@
+{
+  "session_id": "6f1c2a9e-0b7d-4c53-9a41-2d8e5b7a1c32",
+  "response": "Done.",
+  "stats": {
+    "models": {
+      "gemini-flash@vertex": {
+        "api": {"totalRequests": 1, "totalErrors": 1, "totalLatencyMs": 900},
+        "tokens": {"prompt": 500, "candidates": 0, "total": 500, "cached": 0, "thoughts": 0, "tool": 0}
+      },
+      "gemini-3.5-flash-lite": {
+        "api": {"totalRequests": 2, "totalErrors": 0, "totalLatencyMs": 1500},
+        "tokens": {"prompt": 700, "candidates": 150, "total": 850, "cached": 100, "thoughts": 0, "tool": 0}
+      }
+    }
+  }
+}

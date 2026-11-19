@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"sess-0005","model":"claude-sonnet@vertex","tools":["Read","Edit","Bash"]}
+{"type":"assistant","message":{"model":"claude-sonnet@vertex","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":120,"output_tokens":30}},"session_id":"sess-0005"}
+{"type":"result","subtype":"success","is_error":false,"result":"Done.","session_id":"sess-0005","total_cost_usd":0.0412,"num_turns":3,"modelUsage":{"claude-sonnet@vertex":{"inputTokens":120,"outputTokens":30,"cacheReadInputTokens":400,"cacheCreationInputTokens":50,"costUSD":0},"claude-opus-5@vertex":{"inputTokens":10,"outputTokens":2,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"costUSD":0}}}

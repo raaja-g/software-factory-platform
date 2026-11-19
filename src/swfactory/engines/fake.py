@@ -45,6 +45,7 @@ class FakeTurn:
     used_models: tuple[str, ...] = ()
     error: str | None = None
     usage: Usage = field(default_factory=Usage)
+    session_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +62,7 @@ class _Entry:
     used_models: tuple[str, ...]
     error: str | None = None
     usage: Usage = field(default_factory=Usage)
+    session_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -88,6 +90,7 @@ class FakeScript:
                     used_models=tuple(t.get("used_models") or ()),
                     error=t.get("error"),
                     usage=Usage(**(t.get("usage") or {})),
+                    session_id=t.get("session_id"),
                 )
             )
         return cls(default, entries)
@@ -122,6 +125,7 @@ class FakeScript:
             best.used_models,
             best.error,
             best.usage,
+            best.session_id,
         )
 
 
@@ -157,7 +161,7 @@ class FakeEngine:
         return AgentResult(
             status=turn.status,
             output=turn.output,
-            session_id=None,
+            session_id=turn.session_id,
             usage=turn.usage,
             used_models=turn.used_models,
             reported_cost_usd=None,
@@ -250,6 +254,7 @@ class ScriptedBuilder:
         if held:
             await asyncio.Event().wait()  # only cancellation ends this
         text = "Implemented the change.\n" + "".join(f"- {p}\n" for p in edited)
+        assert task.output_path is not None
         await box.write_text(task.output_path, text)
         return AgentResult(
             status=RunStatus.OK,

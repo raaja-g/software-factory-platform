@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from swfactory.domain.types import EngineSupport, Role, SelectionMode
 
@@ -39,6 +39,7 @@ class RoleModel:
 class ResolvedProfile:
     name: str
     roles: Mapping[Role, RoleModel]
+    continuity: Literal["fresh", "resume"] = "fresh"
 
     def for_role(self, role: Role) -> RoleModel:
         rm = self.roles.get(role)
@@ -58,7 +59,9 @@ class ResolvedProfile:
         raise KeyError(f"profile {self.name} has no {role.value}")
 
     @classmethod
-    def from_def(cls, name: str, pdef: Profile) -> ResolvedProfile:
+    def from_def(
+        cls, name: str, pdef: Profile, *, default_continuity: Literal["fresh", "resume"] = "fresh"
+    ) -> ResolvedProfile:
         roles: dict[Role, RoleModel] = {}
         for role, rp in pdef.roles.items():
             roles[role] = RoleModel(
@@ -70,7 +73,11 @@ class ResolvedProfile:
                 sticky=rp.sticky if rp.sticky is not None else role is Role.BUILDER,
                 allow_experimental=rp.allow_experimental,
             )
-        return cls(name=name, roles=MappingProxyType(roles))
+        return cls(
+            name=name,
+            roles=MappingProxyType(roles),
+            continuity=pdef.continuity or default_continuity,
+        )
 
 
 def resolve_profile(
@@ -91,7 +98,10 @@ def resolve_profile(
         name, source = defn.factory.defaults.profile, "global"
     if name not in defn.profiles:
         raise KeyError(f"unknown profile '{name}'")
-    return ResolvedProfile.from_def(name, defn.profiles[name]), source
+    resolved = ResolvedProfile.from_def(
+        name, defn.profiles[name], default_continuity=defn.factory.defaults.builder_continuity
+    )
+    return resolved, source
 
 
 def model_family(upstream_id: str) -> str:

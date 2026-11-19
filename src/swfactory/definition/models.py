@@ -50,6 +50,7 @@ class StrictModel(BaseModel):
 class Defaults(StrictModel):
     profile: str = "team-gemini"
     max_rounds: int = 2
+    builder_continuity: Literal["fresh", "resume"] = "fresh"
     max_fix_attempts: int = 1
     step_timeouts_min: dict[str, int] = Field(
         default_factory=lambda: {
@@ -437,7 +438,7 @@ class RoleProfile(StrictModel):
 
 class Profile(StrictModel):
     description: str = ""
-    continuity: Literal["fresh", "resume"] = "fresh"
+    continuity: Literal["fresh", "resume"] | None = None
     roles: dict[Role, RoleProfile]
 
 

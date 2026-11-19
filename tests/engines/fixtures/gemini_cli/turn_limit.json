@@ -1,0 +1,4 @@
+{
+  "session_id": "6f1c2a9e-0b7d-4c53-9a41-2d8e5b7a1c31",
+  "error": {"type": "FatalTurnLimitedError", "message": "Reached max session turns for this session.", "code": 53}
+}

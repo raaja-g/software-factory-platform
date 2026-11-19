@@ -9,6 +9,7 @@ import signal as signal_mod
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -211,7 +212,12 @@ async def crash_and_resume(
             proc2 = spawn(
                 script, lease_s=lease_s
             )  # exited idle before the lease ran out: try again
-        return (await job()).stage == "merged"
+        j = await job()
+        # A graph node writes merged; the worker then consumes the command and releases its lease.
+        # Wait for no live lease (a dead worker's expired one can stay on a finished job), or the
+        # test would kill the worker half way through its last step.
+        live = j.lease_until is not None and j.lease_until > datetime.now(UTC)
+        return j.stage == "merged" and not live
 
     proc2 = spawn(script, lease_s=lease_s)
     try:

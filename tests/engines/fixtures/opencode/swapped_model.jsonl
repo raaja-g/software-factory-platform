@@ -1,0 +1,7 @@
+{"type":"step_start","timestamp":1763530000000,"sessionID":"ses_abc123","part":{"id":"prt_1","sessionID":"ses_abc123","messageID":"msg_1","type":"step-start","modelID":"gemini-pro@vertex"}}
+{"type":"tool_use","timestamp":1763530001000,"sessionID":"ses_abc123","part":{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"git status"},"output":"clean"}}}
+{"type":"text","timestamp":1763530002000,"sessionID":"ses_abc123","part":{"type":"text","text":"Working on it."}}
+{"type":"step_finish","timestamp":1763530003000,"sessionID":"ses_abc123","part":{"type":"step-finish","modelID":"gemini-pro@vertex","reason":"tool-calls","cost":0,"tokens":{"input":100,"output":10,"reasoning":0,"cache":{"read":50,"write":5}}}}
+{"type":"step_start","timestamp":1763530004000,"sessionID":"ses_abc123","part":{"type":"step-start","modelID":"gemini-pro@vertex"}}
+{"type":"text","timestamp":1763530005000,"sessionID":"ses_abc123","part":{"type":"text","text":"Done."}}
+{"type":"step_finish","timestamp":1763530006000,"sessionID":"ses_abc123","part":{"type":"step-finish","modelID":"gemini-pro@vertex","reason":"stop","cost":0,"tokens":{"input":120,"output":4,"reasoning":0,"cache":{"read":60,"write":0}}}}

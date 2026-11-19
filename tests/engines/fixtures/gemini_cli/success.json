@@ -1,0 +1,14 @@
+{
+  "session_id": "6f1c2a9e-0b7d-4c53-9a41-2d8e5b7a1c30",
+  "response": "Done. I added the requested function and a test.",
+  "stats": {
+    "models": {
+      "gemini-flash@vertex": {
+        "api": {"totalRequests": 3, "totalErrors": 0, "totalLatencyMs": 4200},
+        "tokens": {"prompt": 1200, "candidates": 300, "total": 1700, "cached": 400, "thoughts": 200, "tool": 0}
+      }
+    },
+    "tools": {"totalCalls": 2, "totalSuccess": 2, "totalFail": 0},
+    "files": {"totalLinesAdded": 12, "totalLinesRemoved": 1}
+  }
+}

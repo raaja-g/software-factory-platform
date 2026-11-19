@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from langgraph.types import Command, Send
+from sqlalchemy import select
 
-from swfactory.domain.types import Stage, Verdict
+from swfactory.db.tables import AgentRun
+from swfactory.domain.types import Role, Stage, Verdict
 from swfactory.events import record_event
 from swfactory.graph.deps import Deps
 from swfactory.graph.nodes import enter_stage, job_uuid, merged
@@ -18,6 +20,21 @@ VERIFY_TIMEOUT_KEY = "verify"
 _NO_TRIAGE = {"kind": "feature", "size": "M", "risk": "low", "touches_ui": False}
 
 
+async def _builder_trailers(deps: Deps, job_id) -> dict[str, str] | None:
+    async with deps.sessions() as s:
+        model = (
+            await s.execute(
+                select(AgentRun.requested_model)
+                .where(AgentRun.job_id == job_id, AgentRun.role == str(Role.BUILDER))
+                .order_by(AgentRun.started_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if not model:
+        return None
+    return {"Factory-Job": str(job_id), "Factory-Role": "builder", "Factory-Model": model}
+
+
 def make(deps: Deps):
     async def verify(state: JobState) -> Command:
         job_id = job_uuid(state)
@@ -26,6 +43,7 @@ def make(deps: Deps):
         rnd = state.get("round", 1)
         runner = defn.runners.get(app.runner)
         box = await job_sandbox(deps, job_id)
+        trailers = await _builder_trailers(deps, job_id)
         async with running(box):
             result: GateResult = await VerifyGate(
                 deps.git, deps.artifacts, deps.sandboxes, SmokeRunner()
@@ -38,6 +56,7 @@ def make(deps: Deps):
                 attempt=state.get("fix_attempts", 0) + 1,
                 setup=runner.setup_commands if runner is not None else (),
                 test_timeout_s=step_timeout_s(defn, VERIFY_TIMEOUT_KEY),
+                trailers=trailers,
             )
         update: dict = {
             "verify_status": result.status.value,

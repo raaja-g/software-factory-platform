@@ -110,3 +110,12 @@ def log_context(
         if v is not None
     }
     return structlog.contextvars.bound_contextvars(**fields)
+
+
+def safe_error(exc: BaseException) -> str:
+    """An exception reduced to its type and HTTP status, for log lines.
+
+    The message of an HTTP error can hold the request URL, and a gateway run key travels in a URL
+    query, so the message is never logged."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return f"{type(exc).__name__}" + (f" (HTTP {status})" if status else "")

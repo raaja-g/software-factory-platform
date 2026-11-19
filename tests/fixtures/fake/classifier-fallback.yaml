@@ -1,0 +1,5 @@
+turns:
+  - role: reviewer-code
+    round: 1
+    output: "VERDICT: PASS\nfine"
+    used_models: [claude-sonnet@vertex, claude-opus-5@vertex]

@@ -1,0 +1,12 @@
+description: E2E, Gemini CLI on Flash
+continuity: fresh
+roles:
+  spec-writer:       { engine: gemini_cli, model: gemini-flash@vertex }
+  requirements:      { engine: gemini_cli, model: gemini-flash@vertex }
+  builder:           { engine: gemini_cli, model: gemini-flash@vertex, mode: fixed, sticky: true }
+  reviewer-security: { engine: gemini_cli, model: gemini-flash@vertex }
+  reviewer-code:     { engine: gemini_cli, model: gemini-flash@vertex }
+  reviewer-ux:       { engine: direct,     model: gemini-flash@vertex }
+  reviewer-ui:       { engine: direct,     model: gemini-flash@vertex }
+  approver:          { engine: direct,     model: gemini-flash@vertex }
+  judge:             { engine: direct,     model: gemini-flash@vertex }

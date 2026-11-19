@@ -1,0 +1,13 @@
+{
+  "session_id": "6f1c2a9e-0b7d-4c53-9a41-2d8e5b7a1c33",
+  "init": {"model": "gemini-3.5-flash-lite"},
+  "response": "Done.",
+  "stats": {
+    "models": {
+      "gemini-flash@vertex": {
+        "api": {"totalRequests": 2, "totalErrors": 0, "totalLatencyMs": 1800},
+        "tokens": {"prompt": 800, "candidates": 120, "total": 920, "cached": 0, "thoughts": 0, "tool": 0}
+      }
+    }
+  }
+}

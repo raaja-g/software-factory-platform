@@ -4,7 +4,7 @@ Updated after every completed step.
 
 ## Now
 
-M4 and M5 are done; starting M6 (the coding-agent adapters). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
+M6 is done; starting M7 (API, dashboard, CLI, local release). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
 
 ## Plan revision (before coding)
 
@@ -91,6 +91,22 @@ M4 and M5 are done; starting M6 (the coding-agent adapters). M0's spikes wait fo
 - [x] **2026-11-19** M4 and M5 checked by me: 546 default, 289 database and 49 Docker tests pass; ruff and pyright clean; no containers, volumes or networks left over. The exit-check agent hung for 3 hours and was stopped.
 - [ ] **Needs you:** M5's live checks (`factory models refresh` against Vertex, the live probe test) need gcloud ADC, `GOOGLE_CLOUD_PROJECT`, and the Claude models enabled in Model Garden.
 
+## M6 Engines (done)
+
+- [x] **2026-11-19** M6.1 Runner image with locked engine CLIs
+- [x] **2026-11-19** M6.2 Engine base helpers, registry and stub CLI harness
+- [x] **2026-11-19** M6.3 Direct engine
+- [x] **2026-11-19** M6.4 OpenCode engine
+- [x] **2026-11-19** M6.5 Claude Code engine
+- [x] **2026-11-19** M6.6 Gemini CLI engine
+- [x] **2026-11-19** M6.7 Flag silent model swaps
+- [x] **2026-11-19** M6.8 Builder continuity (fresh and resume)
+- [x] **2026-11-19** M6.8b Commit trailers
+- [x] **2026-11-19** M6.8c Worker with real engines
+- [x] **2026-11-19** M6.9 Opt-in end-to-end test per engine
+- [x] **2026-11-19** Security fixes: instruction-file cleanup is one fail-closed `find ... -exec rm` and covers every engine's config; errors are logged without URLs that could hold a run key.
+- [ ] **Needs you:** live runs of each engine against real models (gcloud ADC, Model Garden access).
+
 ## Milestones
 
 Order for now: everything runs on your Mac. M0, then M1 to M8, then M10, M11 and M12. M9 (the GCP team instance) and the team-only parts of M13 wait until you ask for them. The private package mirror moves earlier, because your first apps need private packages.
@@ -103,7 +119,7 @@ Order for now: everything runs on your Mac. M0, then M1 to M8, then M10, M11 and
 | M3 Roles, contracts, triage | done |
 | M4 Sandboxes, verify gate, local git | done |
 | M5 Gateway, models, cost | done in code; live Vertex checks need your setup |
-| M6 Engines | not started |
+| M6 Engines | done in code; live runs need your setup |
 | M7 API, dashboard, CLI, local release | not started |
 | M8 GitHub and automations | not started |
 | M10 Scoring and benchmarks | not started |

@@ -41,11 +41,13 @@ from swfactory.domain.types import (
     Usage,
     Verdict,
 )
+from swfactory.engines.base import fallback_detected
 from swfactory.engines.registry import get_engine
+from swfactory.events import record_event
 from swfactory.gateway.client import model_error_class
 from swfactory.gateway.render import SPEND_BATCH_S
 from swfactory.graph.deps import Deps
-from swfactory.logging import log_context
+from swfactory.logging import log_context, safe_error
 from swfactory.models.catalog import ModelInfo
 from swfactory.models.profiles import model_family, resolve_profile
 from swfactory.models.selection import ModelChoice, NoModelAvailable, SelectionContext
@@ -207,7 +209,7 @@ async def settle_run_cost(deps: Deps, run_id: UUID) -> Decimal | None:
     try:
         spend = await deps.gateway.run_spend(run_id)
     except Exception as exc:
-        log.warning("run.spend_unreadable", run_id=str(run_id), error=repr(exc))
+        log.warning("run.spend_unreadable", run_id=str(run_id), error=safe_error(exc))
         return None
     if spend is None:
         return None
@@ -222,7 +224,7 @@ async def _revoke_stale(deps: Deps, run_id: UUID) -> None:
     try:
         await deps.gateway.revoke_run(run_id)
     except Exception as exc:
-        log.warning("run key revoke failed", run_id=str(run_id), error=repr(exc))
+        log.warning("run key revoke failed", run_id=str(run_id), error=safe_error(exc))
     cost = await settle_run_cost(deps, run_id)
     if cost is not None:
         await deps.budgets.release_run(run_id, cost)
@@ -244,37 +246,49 @@ def review_attachments(kind: str, screenshots: Sequence[str]) -> tuple[str, ...]
     return tuple(screenshot_path(n) for n in screenshots)
 
 
-_INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "GEMINI.md")
+# Files and folders that engines load as instructions or settings. Any of them in the builder's
+# copy could steer a reviewer or approver, so they are removed (case-insensitively, at any depth).
+_INSTRUCTION_FILES = (
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CLAUDE.local.md",
+    "GEMINI.md",
+    "opencode.json",
+    "opencode.jsonc",
+)
+_INSTRUCTION_DIRS = (".claude", ".opencode", ".gemini")
+
+
+def instruction_cleanup_argv(repo: str) -> list[str]:
+    """One find that deletes every instruction file and engine config folder under repo.
+
+    No file name is ever read back or split (names can hold newlines): find runs rm itself."""
+
+    def names(items: tuple[str, ...]) -> list[str]:
+        out: list[str] = []
+        for n in items:
+            out += ["-iname", n, "-o"]
+        return out[:-1]
+
+    return [
+        "find", repo,
+        "(", "-path", f"{repo}/.git", "-prune", ")",
+        "-o", "(", "-type", "d", "(", *names(_INSTRUCTION_DIRS), ")", "-prune",
+        "-exec", "rm", "-rf", "--", "{}", "+", ")",
+        "-o", "(", "-type", "f", "(", *names(_INSTRUCTION_FILES), ")",
+        "-exec", "rm", "-f", "--", "{}", "+", ")",
+    ]  # fmt: skip
 
 
 async def isolate_instructions(deps: Deps, job_id: UUID, box: Sandbox) -> None:
     """Leave only the default branch's AGENTS.md in the box: engines load these files, so a
-    builder's edits to them must not steer a reviewer or approver (the diff still shows them)."""
-    found = await box.exec(
-        [
-            "find",
-            REPO,
-            "(",
-            "-name",
-            ".git",
-            "-prune",
-            ")",
-            "-o",
-            "(",
-            "-not",
-            "-type",
-            "d",
-            "(",
-            *[x for n in _INSTRUCTION_FILES for x in ("-name", n, "-o")][:-1],
-            ")",
-            "-print",
-            ")",
-        ],
-        cwd=REPO,
-    )
-    for line in found.stdout.splitlines():
-        if line.strip():
-            await box.remove(line.strip())
+    builder's edits to them must not steer a reviewer or approver (the diff still shows them).
+
+    Fails closed: if the cleanup does not succeed, the step errors instead of running a reviewer
+    on a copy that may still hold the builder's instructions."""
+    cleaned = await box.exec(instruction_cleanup_argv(REPO), cwd=REPO)
+    if cleaned.exit_code != 0:
+        raise RuntimeError(f"could not remove instruction files (exit {cleaned.exit_code})")
     base = await deps.artifacts.get_text(job_id, "base/AGENTS.md")
     if base is not None:
         await box.write_text(f"{REPO}/AGENTS.md", base)
@@ -321,7 +335,7 @@ async def keep_job_branch(deps: Deps, job_id: UUID) -> None:
         async with running(box):
             await deps.git.keep_branch(job, app, box)
     except Exception as exc:
-        log.warning("job.keep_branch_failed", job_id=str(job_id), error=repr(exc))
+        log.warning("job.keep_branch_failed", job_id=str(job_id), error=safe_error(exc))
 
 
 async def job_head(deps: Deps, job_id: UUID) -> str | None:
@@ -333,7 +347,7 @@ async def job_head(deps: Deps, job_id: UUID) -> str | None:
             res = await box.exec(["git", "rev-parse", "HEAD"], cwd=REPO)
         return res.stdout.strip() if res.exit_code == 0 and res.stdout.strip() else None
     except Exception as exc:
-        log.warning("job.head_failed", job_id=str(job_id), error=repr(exc))
+        log.warning("job.head_failed", job_id=str(job_id), error=safe_error(exc))
         return None
 
 
@@ -401,7 +415,7 @@ async def build_selection_context(
             stat = await deps.git.diff_stat(box, job.base_sha)
             files, lines = stat.files, stat.insertions + stat.deletions
         except Exception as exc:  # no repository to diff yet
-            log.info("selection.diff_stat_failed", error=repr(exc))
+            log.info("selection.diff_stat_failed", error=safe_error(exc))
     async with deps.sessions() as s:
         verdicts = await latest_reviewer_verdicts(s, job.id, before_round=round)
         builder_alias = await last_model_decision(s, job.id, Role.BUILDER.value)
@@ -459,13 +473,14 @@ class _Run:
     result: AgentResult | None
     model_failure: _ModelFailure | None = None
     repair: tuple[str, str | None, str] | None = None  # (rejected text, session, problem)
+    resume_failed: bool = False  # a resumed attempt that never reached a model turn
 
 
 async def _key_spend(deps: Deps, key: str) -> Decimal | None:
     try:
         return await deps.gateway.key_spend(key)
     except Exception as exc:
-        log.warning("run.spend_unreadable", error=repr(exc))
+        log.warning("run.spend_unreadable", error=safe_error(exc))
         return None
 
 
@@ -504,7 +519,7 @@ async def _close_run(
         try:
             await deps.gateway.revoke(key)
         except Exception as exc:  # the key expires by its TTL; finalize revokes the job's keys
-            log.warning("run key revoke failed", run_id=str(run_id), error=repr(exc))
+            log.warning("run key revoke failed", run_id=str(run_id), error=safe_error(exc))
     if cost is None:
         if key is None:  # nothing was minted, so nothing was spent
             cost = Decimal(0)
@@ -512,17 +527,17 @@ async def _close_run(
                 async with deps.sessions() as s, s.begin():
                     await record_run_cost(s, run_id, cost, CostSource.GATEWAY)
             except Exception as exc:
-                log.warning("run.cost_failed", run_id=str(run_id), error=repr(exc))
+                log.warning("run.cost_failed", run_id=str(run_id), error=safe_error(exc))
         else:
             try:
                 cost = await settle_run_cost(deps, run_id)
             except Exception as exc:
-                log.warning("run.settle_failed", run_id=str(run_id), error=repr(exc))
+                log.warning("run.settle_failed", run_id=str(run_id), error=safe_error(exc))
     if cost is not None:
         try:
             await deps.budgets.release_run(run_id, cost)
         except Exception as exc:
-            log.warning("run.release_failed", run_id=str(run_id), error=repr(exc))
+            log.warning("run.release_failed", run_id=str(run_id), error=safe_error(exc))
 
 
 async def run_agent_step(
@@ -574,6 +589,7 @@ async def run_agent_step(
                 spec=spec,
                 defn=defn,
                 slug=slug,
+                resume=resume,
             )
 
 
@@ -598,6 +614,7 @@ async def _run_in_box(
     choice: ModelChoice | None = None,
     fan_out: int = 1,
     isolated: bool = False,
+    resume: bool = False,
 ) -> StepOutcome:
     job_id = job.id
     defaults = defn.factory.defaults
@@ -613,6 +630,7 @@ async def _run_in_box(
     failed: set[str] = set()  # models that failed in this step (L15)
     fell_back = False
     n = 0  # transient retries used
+    resume_reason: str | None = None  # set once a resumed attempt could not load its session
     while True:
         left = int(deadline - _monotonic())
         if n > 0 and left < MIN_ATTEMPT_S:
@@ -640,6 +658,8 @@ async def _run_in_box(
             exclude=failed,
             fan_out=fan_out,
             deadline=deadline,
+            resume=resume,
+            continuity_override=resume_reason,
         )
         outcome = run.outcome
         if run.model_failure is not None:
@@ -650,6 +670,10 @@ async def _run_in_box(
             fell_back = True
             if run.model_failure.cls == "quota":
                 await _sleep(min(_backoff(defaults, 0), MAX_QUOTA_BACKOFF_S))
+            continue
+        if run.resume_failed and resume:
+            # the engine could not load the session: one immediate fresh retry, not a transient one
+            resume, resume_reason = False, "fresh: resume failed"
             continue
         result = run.result
         if result is None or not is_transient(
@@ -662,6 +686,40 @@ async def _run_in_box(
         await _sleep(_backoff(defaults, n - 1))
     assert outcome is not None
     return outcome
+
+
+async def _continuity(
+    deps: Deps,
+    job_id: UUID,
+    role: Role,
+    engine_name: str,
+    model_alias: str,
+    *,
+    resume: bool,
+) -> tuple[str, str | None]:
+    """(meta value, session to resume): the latest ok builder run's session, when it still fits."""
+    if role != Role.BUILDER or not resume:
+        return "fresh", None
+    if engine_name == "direct":
+        return "fresh: direct", None
+    async with deps.sessions() as s:
+        row = (
+            await s.execute(
+                select(AgentRun.engine, AgentRun.model_alias, AgentRun.session_id)
+                .where(
+                    AgentRun.job_id == job_id,
+                    AgentRun.role == Role.BUILDER.value,
+                    AgentRun.status == RunStatus.OK.value,
+                )
+                .order_by(AgentRun.started_at.desc())
+                .limit(1)
+            )
+        ).first()
+    if row is None or not row.session_id:
+        return "fresh", None
+    if row.engine != engine_name or row.model_alias != model_alias:
+        return "fresh: engine or model changed", None
+    return "resume", row.session_id
 
 
 async def _attempt(
@@ -688,6 +746,8 @@ async def _attempt(
     exclude: Collection[str] = (),
     fan_out: int = 1,
     deadline: float = float("inf"),
+    resume: bool = False,
+    continuity_override: str | None = None,
 ) -> _Run:
     job_id = job.id
     # step 3: the budget gate, before any model is chosen or key minted
@@ -724,6 +784,13 @@ async def _attempt(
             texts[p] = t
 
     base_meta: dict[str, Any] = {}
+    continuity, continuity_session = await _continuity(
+        deps, job_id, role, engine_name, picked.model.alias, resume=resume
+    )
+    if continuity_override is not None:
+        continuity, continuity_session = continuity_override, None
+    if role == Role.BUILDER:
+        base_meta["continuity"] = continuity
     run_head = head
     if tool_policy == ToolPolicy.WRITE or (role in _RECORD_HEAD_ROLES and run_head is None):
         run_head = await _head(box)
@@ -763,6 +830,7 @@ async def _attempt(
             prev=prev,
             prev_session=prev_session,
             repairs=repairs,
+            continuity_session=continuity_session,
         )
         if run.repair is None:
             return run
@@ -798,6 +866,7 @@ async def _run_once(
     prev: tuple[str, str] | None,
     prev_session: str | None,
     repairs: int,
+    continuity_session: str | None = None,
 ) -> _Run:
     """One run: its own id, reservation, key and row; closed in the ``finally``."""
     job_id = job.id
@@ -862,7 +931,7 @@ async def _run_once(
             if "diff.patch" in texts:
                 diff_cut = diff_was_cut(prompt)
                 run_meta["diff_cut"] = diff_cut
-            resume_session: str | None = None
+            resume_session: str | None = continuity_session
             if prev is not None:
                 repair = REPAIR_PROMPT.format(
                     problem=prev[1],
@@ -924,7 +993,7 @@ async def _run_once(
                     try:
                         await deps.catalog.mark_unavailable(choice.model.alias, cls, first)
                     except Exception as exc:
-                        log.warning("catalog.mark_unavailable_failed", error=repr(exc))
+                        log.warning("catalog.mark_unavailable_failed", error=safe_error(exc))
                     error = f"model unavailable: {cls}: {first}"
                     model_failure = _ModelFailure(choice.model.alias, cls)
             if writes:
@@ -964,16 +1033,47 @@ async def _run_once(
                     engine_version=result.engine_version if result is not None else None,
                     used_models=result.used_models if result is not None else (),
                 )
-                if run_meta:
-                    row = await s.get(AgentRun, run_id)
-                    if row is not None:
+                row = await s.get(AgentRun, run_id)
+                if row is not None:
+                    if result is not None and result.session_id:
+                        row.session_id = result.session_id
+                    # §9.3: classifier traffic stays in used_models but is not a swap
+                    ignore = (
+                        defaults.claude_classifier_fallbacks if engine_name == "claude_code" else ()
+                    )
+                    used = tuple(result.used_models) if result is not None else ()
+                    flagged = fallback_detected(choice.model, used, ignore=ignore)
+                    row.requested_model = choice.model.alias
+                    row.fallback_detected = flagged
+                    if run_meta:
                         row.meta = {**row.meta, **run_meta}
+                    if flagged:
+                        await record_event(
+                            s,
+                            job_id,
+                            "model.fallback",
+                            {
+                                "source": "engine",
+                                "role": role.value,
+                                "round": round,
+                                "requested": choice.model.alias,
+                                "used": list(used),
+                            },
+                        )
                 if pending is not None:
                     await record_run_cost(s, run_id, pending[0], pending[1])
             if pending is not None:
                 cost = pending[0]
             if status == RunStatus.BUDGET:
                 raise BudgetExceeded("run", Decimal(0), Decimal(0))
+            resume_failed = (
+                continuity_session is not None
+                and prev is None
+                and result is not None
+                and status in (RunStatus.FAILED, RunStatus.TIMEOUT)
+                and usage.input_tokens == 0
+                and model_failure is None
+            )
             if problem is not None and not final:
                 session = result.session_id if result is not None else None
                 return _Run(
@@ -991,6 +1091,7 @@ async def _run_once(
                 StepOutcome(run_id, status, text_out, verdict, decision, False, diff_cut),
                 result,
                 model_failure,
+                resume_failed=resume_failed,
             )
     finally:
         await _close_run(deps, run_id, key, cost)

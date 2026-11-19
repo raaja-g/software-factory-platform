@@ -1,0 +1,2 @@
+{"type":"step_start","timestamp":1763530000000,"sessionID":"ses_err1","part":{"type":"step-start","modelID":"gemini-flash@vertex"}}
+{"type":"error","timestamp":1763530001000,"sessionID":"ses_err1","error":{"name":"UnknownError","data":{"message":"Unable to connect to http://gateway-edge:4000/v1/chat/completions: connect ECONNREFUSED 172.20.0.3:4000"}}}

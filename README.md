@@ -2,7 +2,7 @@
 
 A platform that turns a requirement into reviewed, merged code. For each feature it runs spec, build, verify, four independent reviews, approve and deliver, using coding agents on any model provider. It runs on your machine in Docker, many apps and features at a time.
 
-**Status: under construction.** Milestones M1 to M5 are built: foundation, the job loop, roles and contracts, sandboxes with the verify gate and local git, and the model gateway with cost control. Still to come: the coding-agent adapters (M6), the local release with the dashboard (M7) and GitHub (M8). See [progress.md](progress.md) for the step-by-step status.
+**Status: under construction.** Milestones M1 to M6 are built: foundation, the job loop, roles and contracts, sandboxes with the verify gate and local git, the model gateway with cost control, and the coding-agent adapters. Still to come: the local release with the API, dashboard and point-and-run (M7) and GitHub (M8). See [progress.md](progress.md) for the step-by-step status.
 
 ## What works now (M1 and M2)
 
@@ -37,7 +37,21 @@ docker compose up -d gateway gateway-edge
 uv run factory models refresh
 ```
 
-Not yet verified against real models: the live checks (models refresh against Vertex) need your credentials and the Claude models enabled in Model Garden. No real coding agent runs yet: the adapters come in M6.
+- **Coding engines (M6).** Agent steps run behind one `Engine` interface with four adapters: OpenCode (the default for team profiles, any model through the gateway), Claude Code (`claude-vertex` profile, Claude models, or other models as an experiment), Gemini CLI (optional), and a direct single call to the gateway for steps that need no tools (approver, judges). The CLIs are installed in the runner image from a committed lockfile (OpenCode 1.19.5, Claude Code 2.1.322, Gemini CLI 0.68.0). Each adapter enforces the role's tool policy (read-only roles cannot write files, reviewers can run tests but not edit), ignores project-level engine config in the repo, reports usage and cost per run, and detects when a model was silently swapped. Builder commits carry trailers naming the job, role and model. A builder can start each round fresh (default) or resume its session.
+
+Run a real job (needs the gateway running and the Claude and Gemini models you use enabled):
+
+```bash
+docker compose --profile build build runner runner-web
+uv run factory gateway render && docker compose up -d gateway gateway-edge
+uv run factory jobs create --app demo --profile team-gemini "Add a hello command"   # OpenCode
+uv run factory jobs create --app demo --profile claude-vertex "Add a hello command" # Claude Code
+uv run factory worker --exit-when-idle                                              # real engines
+```
+
+An opt-in end-to-end test builds one small feature per engine on cheap models: `FACTORY_E2E_ENGINES=opencode,claude_code uv run pytest -m e2e` (skipped unless the gateway and credentials are present).
+
+**Not yet verified against real models.** The adapter tests use stub CLIs and fixtures written by hand from each CLI's documented output, because no credentials were available; the live checks (`factory models refresh`, the end-to-end tests) need your gcloud login and the models enabled in Model Garden, and may turn up differences in the real CLIs' output. Sandboxes still have open internet access: the `allowed_hosts` list is not enforced until the egress proxy and internal job networks (M13).
 
 ## Set up and run
 
@@ -73,4 +87,4 @@ uv run pytest -m docker                         # builds and uses real container
 
 ## Next
 
-M6: the coding-agent adapters (OpenCode, Claude Code, Gemini CLI and a direct model call). Then the API, dashboard, CLI and local release with point-and-run and the package mirror (M7), and GitHub (M8).
+M7: the API, dashboard and CLI, `factory run --repo ... --req ...` (point at a repo with a requirement), the private package mirror, and a one-command local release. Then GitHub (M8).

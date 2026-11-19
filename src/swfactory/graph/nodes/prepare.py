@@ -6,6 +6,7 @@ from langgraph.types import Command
 
 from swfactory.db.tables import Backlog, Job
 from swfactory.domain.types import Stage
+from swfactory.gitops.hooks import install_trailer_hook
 from swfactory.graph.app_context import render_app_md, render_feature_md, stack_from_agents_md
 from swfactory.graph.deps import Deps
 from swfactory.graph.nodes import enter_stage, job_uuid
@@ -34,6 +35,7 @@ def make(deps: Deps):
         box = await deps.sandboxes.ensure(job_id, _runner(defn, app))
         async with running(box):
             base_sha = await deps.git.prepare(job, app, box)
+            await install_trailer_hook(box)
             async with deps.sessions.begin() as s:
                 row = await s.get(Job, job_id)
                 if row is not None:

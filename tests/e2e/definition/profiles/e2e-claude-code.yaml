@@ -1,0 +1,12 @@
+description: E2E, Claude Code on Haiku, direct (Anthropic format) approver
+continuity: fresh
+roles:
+  spec-writer:       { engine: claude_code, model: claude-haiku@vertex }
+  requirements:      { engine: claude_code, model: claude-haiku@vertex }
+  builder:           { engine: claude_code, model: claude-haiku@vertex, mode: fixed, sticky: true }
+  reviewer-security: { engine: claude_code, model: claude-haiku@vertex }
+  reviewer-code:     { engine: claude_code, model: claude-haiku@vertex }
+  reviewer-ux:       { engine: direct,      model: claude-haiku@vertex }
+  reviewer-ui:       { engine: direct,      model: claude-haiku@vertex }
+  approver:          { engine: direct,      model: claude-haiku@vertex }
+  judge:             { engine: direct,      model: claude-haiku@vertex }

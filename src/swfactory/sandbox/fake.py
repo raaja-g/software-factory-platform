@@ -65,13 +65,27 @@ class FakeSandbox:
         self.exec_timeouts.append(timeout_s)
         if argv and argv[0] == "git":
             return self._git_reply(argv)
-        if argv and argv[0] == "find":  # the instruction-file sweep: list matching files
-            root = argv[1].rstrip("/") + "/"
-            names = {a for a in argv if a.endswith(".md")}
-            hits = [p for p in self.files if p.startswith(root) and p.rsplit("/", 1)[-1] in names]
-            return ExecResult(0, "\n".join(sorted(hits)), "", False, 0.0)
+        if argv and argv[0] == "find":  # the instruction-file sweep: find ... -exec rm ...
+            return self._find_sweep(argv)
+        if argv and argv[0] == "chmod":  # set-up plumbing, never a scripted command result
+            return ExecResult(0, "", "", False, 0.0)
         if self.exec_results:
             return self.exec_results.pop(0)
+        return ExecResult(0, "", "", False, 0.0)
+
+    def _find_sweep(self, argv: Sequence[str]) -> ExecResult:
+        """Emulate the sweep that deletes instruction files (-iname, case-insensitive) and engine
+        config folders under the root, never touching .git."""
+        root = argv[1].rstrip("/") + "/"
+        names = [argv[i + 1].lower() for i, a in enumerate(argv[:-1]) if a == "-iname"]
+        dir_names = {n for n in names if n.startswith(".") and "." not in n[1:]}
+        file_names = set(names) - dir_names
+        for path in list(self.files):
+            if not path.startswith(root) or path.startswith(root + ".git/"):
+                continue
+            parts = path[len(root) :].split("/")
+            if parts[-1].lower() in file_names or any(d.lower() in dir_names for d in parts[:-1]):
+                del self.files[path]
         return ExecResult(0, "", "", False, 0.0)
 
     async def read_text(self, path: str) -> str | None:

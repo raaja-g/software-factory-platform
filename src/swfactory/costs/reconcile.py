@@ -15,6 +15,7 @@ from swfactory.db.tables import AgentRun, Job
 from swfactory.domain.types import CostSource, RunStatus
 from swfactory.gateway.render import SPEND_BATCH_S
 from swfactory.graph.deps import Deps
+from swfactory.logging import safe_error
 
 log = structlog.get_logger(__name__)
 
@@ -32,7 +33,7 @@ async def _spend(deps: Deps, run_id: UUID) -> Decimal | None:
     try:
         return await deps.gateway.run_spend(run_id)
     except Exception as exc:
-        log.warning("reconcile.spend_unreadable", run_id=str(run_id), error=repr(exc))
+        log.warning("reconcile.spend_unreadable", run_id=str(run_id), error=safe_error(exc))
         return None
 
 
@@ -53,7 +54,7 @@ async def _finish_orphan(deps: Deps, run_id: UUID, now: datetime) -> bool:
     try:
         await deps.gateway.revoke_run(run_id)
     except Exception as exc:
-        log.warning("reconcile.revoke_failed", run_id=str(run_id), error=repr(exc))
+        log.warning("reconcile.revoke_failed", run_id=str(run_id), error=safe_error(exc))
         return False
     async with deps.sessions() as s, s.begin():
         await s.execute(
@@ -96,7 +97,7 @@ async def reconcile_run_costs(deps: Deps, *, now: datetime, limit: int = 100) ->
                 if await record_run_cost(s, run_id, spend, CostSource.GATEWAY):
                     filled += 1
         except Exception as exc:
-            log.warning("reconcile.cost_failed", run_id=str(run_id), error=repr(exc))
+            log.warning("reconcile.cost_failed", run_id=str(run_id), error=safe_error(exc))
     released = 0
     async with deps.sessions() as s:
         stale = await stale_reservations(
@@ -110,7 +111,7 @@ async def reconcile_run_costs(deps: Deps, *, now: datetime, limit: int = 100) ->
             await deps.budgets.release_run(run_id, cost)
             released += 1
         except Exception as exc:
-            log.warning("reconcile.release_failed", run_id=str(run_id), error=repr(exc))
+            log.warning("reconcile.release_failed", run_id=str(run_id), error=safe_error(exc))
     return ReconcileResult(filled, released)
 
 

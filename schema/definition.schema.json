@@ -509,6 +509,15 @@
     "Defaults": {
       "additionalProperties": false,
       "properties": {
+        "builder_continuity": {
+          "default": "fresh",
+          "enum": [
+            "fresh",
+            "resume"
+          ],
+          "title": "Builder Continuity",
+          "type": "string"
+        },
         "claude_classifier_fallbacks": {
           "default": [],
           "items": {
@@ -770,13 +779,20 @@
       "additionalProperties": false,
       "properties": {
         "continuity": {
-          "default": "fresh",
-          "enum": [
-            "fresh",
-            "resume"
+          "anyOf": [
+            {
+              "enum": [
+                "fresh",
+                "resume"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "Continuity",
-          "type": "string"
+          "default": null,
+          "title": "Continuity"
         },
         "description": {
           "default": "",
@@ -1485,6 +1501,7 @@
     "defaults": {
       "$ref": "#/$defs/Defaults",
       "default": {
+        "builder_continuity": "fresh",
         "claude_classifier_fallbacks": [],
         "contract_repair_attempts": 1,
         "definition_poll_s": 300,

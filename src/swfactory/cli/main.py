@@ -477,9 +477,6 @@ def worker(
     """Run jobs from the queue."""
     from swfactory.worker import run_worker
 
-    if fake_script is None:
-        typer.echo("no engines yet: pass --fake-script (real engines arrive in M6)")
-        raise typer.Exit(2)
     settings = get_settings()
 
     async def main() -> None:
