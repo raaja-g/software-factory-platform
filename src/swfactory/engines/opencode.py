@@ -22,10 +22,12 @@ from swfactory.sandbox.paths import HOME, REPO
 OPENCODE_CACHE = "/opt/factory-engines/opencode-cache"
 OPENCODE_HOME_CACHE = "/home/factory/.cache/opencode"
 _GIT_READ_SUBCOMMANDS = ("diff", "log", "show", "status")
-# Deny rules come after the allow rules: the last matching rule wins. They stop options that write
-# files or run programs (git diff --output=FILE, --ext-diff) and any shell chaining or redirection.
-_GIT_READ_DENY = ("*--output*", "*--ext-diff*", "*--open-files-in-pager*", "*;*", "*&*", "*|*",
-                  "*`*", "*$(*", "*>*", "*<*")  # fmt: skip
+# Deny rules come after the allow rules: the last matching rule wins. git accepts any unambiguous
+# abbreviation of a long option, so options that write a file or run a program are denied by
+# prefix (--ou matches --output, --ext matches --ext-diff, --open matches --open-files-in-pager),
+# as are shell chaining, redirection and control characters.
+_GIT_READ_DENY = ("*--ou*", "*--ext*", "*--open*", "*;*", "*&*", "*|*", "*`*", "*$(*", "*>*", "*<*",
+                  "*\n*", "*\r*")  # fmt: skip
 _GIT_READ = {
     "*": "deny",
     **{p: "allow" for sub in _GIT_READ_SUBCOMMANDS for p in (f"git {sub}", f"git {sub} *")},

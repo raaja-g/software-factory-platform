@@ -26,12 +26,10 @@ TOTALS_DIR = f"{CONFIG_DIR}/factory-totals"
 READ_ONLY_TOOLS = ["Read", "Bash(git diff *)", "Bash(git log *)", "Bash(git show *)",
                    "Bash(git status *)"]  # fmt: skip
 NO_EDIT = ["Edit", "Write", "NotebookEdit"]
-# git options that write a file or run a program, denied even inside the read-only git allowlist
-GIT_UNSAFE = [
-    "Bash(git * --output*)",
-    "Bash(git * --ext-diff*)",
-    "Bash(git * --open-files-in-pager*)",
-]
+# git accepts abbreviated long options, so these are prefixes: --ou (--output), --ext (--ext-diff),
+# --open (--open-files-in-pager). They write a file or run a program, so they are denied even
+# inside the read-only git allowlist
+GIT_UNSAFE = ["Bash(git * --ou*)", "Bash(git * --ext*)", "Bash(git * --open*)"]
 
 
 @dataclass(frozen=True, slots=True)

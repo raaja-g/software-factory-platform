@@ -100,7 +100,7 @@ def test_read_only_permission():
     assert first_deny > max(
         keys.index(k) for k, v in bash.items() if v == "allow"
     )  # last match wins
-    for risky in ("*--output*", "*--ext-diff*", "*;*", "*&*", "*|*", "*>*"):
+    for risky in ("*--ou*", "*--ext*", "*--open*", "*;*", "*&*", "*|*", "*>*", "*\n*", "*\r*"):
         assert bash[risky] == "deny"
 
 
