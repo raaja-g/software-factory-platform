@@ -110,6 +110,7 @@ def test_read_only_allowed_tools(ro_task):
     assert a[i + 1 : i + 6] == ["Read", "Bash(git diff *)", "Bash(git log *)",
                                 "Bash(git show *)", "Bash(git status *)"]  # fmt: skip
     assert a[j + 1 : j + 4] == ["Edit", "Write", "NotebookEdit"]
+    assert "Bash(git * --output*)" in a[j + 1 :] and "Bash(git * --ext-diff*)" in a[j + 1 :]
 
 
 def test_read_run_tools(rr_task):

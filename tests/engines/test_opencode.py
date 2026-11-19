@@ -89,10 +89,19 @@ def test_claude_uses_anthropic_provider(claude_task):
 def test_read_only_permission():
     p = opencode_permission(ToolPolicy.READ_ONLY)
     assert p["edit"] == "deny" and p["webfetch"] == "deny"
-    assert p["bash"] == {
-        "*": "deny", "git diff*": "allow", "git log*": "allow",
-        "git show*": "allow", "git status*": "allow",
-    }  # fmt: skip
+    bash = p["bash"]
+    keys = list(bash)
+    assert keys[0] == "*" and bash["*"] == "deny"
+    assert [k for k, v in bash.items() if v == "allow"] == [
+        f"git {s}{x}" for s in ("diff", "log", "show", "status") for x in ("", " *")
+    ]
+    assert bash["git diff"] == bash["git diff *"] == "allow" and "git difftool" not in bash
+    first_deny = min(keys.index(k) for k, v in bash.items() if v == "deny" and k != "*")
+    assert first_deny > max(
+        keys.index(k) for k, v in bash.items() if v == "allow"
+    )  # last match wins
+    for risky in ("*--output*", "*--ext-diff*", "*;*", "*&*", "*|*", "*>*"):
+        assert bash[risky] == "deny"
 
 
 def test_read_run_permission():

@@ -26,6 +26,12 @@ TOTALS_DIR = f"{CONFIG_DIR}/factory-totals"
 READ_ONLY_TOOLS = ["Read", "Bash(git diff *)", "Bash(git log *)", "Bash(git show *)",
                    "Bash(git status *)"]  # fmt: skip
 NO_EDIT = ["Edit", "Write", "NotebookEdit"]
+# git options that write a file or run a program, denied even inside the read-only git allowlist
+GIT_UNSAFE = [
+    "Bash(git * --output*)",
+    "Bash(git * --ext-diff*)",
+    "Bash(git * --open-files-in-pager*)",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +95,7 @@ def claude_argv(task: AgentTask) -> list[str]:
         case ToolPolicy.WRITE:
             a += ["--allowedTools", "Read", "Edit", "Bash"]
         case ToolPolicy.READ_ONLY:
-            a += ["--allowedTools", *READ_ONLY_TOOLS, "--disallowedTools", *NO_EDIT]
+            a += ["--allowedTools", *READ_ONLY_TOOLS, "--disallowedTools", *NO_EDIT, *GIT_UNSAFE]
         case ToolPolicy.READ_RUN:
             a += ["--allowedTools", "Read", "Grep", "Glob", "Bash", "--disallowedTools", *NO_EDIT]
         case ToolPolicy.NONE:

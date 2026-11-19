@@ -187,3 +187,8 @@ async def test_forwarder_with_stub_socat_replays_once(stub_box_gemini, task):
     r = await GeminiCliEngine().run(task, stub_box_gemini)
     assert r.status is RunStatus.OK and r.used_models
     assert r.session_id and r.output
+
+
+def test_forwarder_fails_if_its_socat_is_not_the_listener():
+    # a process that already held the port makes our socat exit; the script must stop, not use it
+    assert "kill -0 $fwd" in FORWARD_SCRIPT and "exit 97" in FORWARD_SCRIPT.split("kill -0")[1]

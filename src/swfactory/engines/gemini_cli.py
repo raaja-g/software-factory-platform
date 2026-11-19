@@ -26,6 +26,7 @@ socat TCP-LISTEN:$port,bind=127.0.0.1,reuseaddr,fork TCP:$gw_host:$gw_port >/dev
 trap 'kill $fwd 2>/dev/null' EXIT
 up=0; for _ in $(seq 25); do (exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null && { up=1; break; }; sleep 0.2; done
 [ "$up" = 1 ] || { echo "factory: localhost forwarder did not start" >&2; exit 97; }
+kill -0 $fwd 2>/dev/null || { echo "factory: localhost port $port is held by another process" >&2; exit 97; }
 gemini "$@"
 """  # noqa: E501
 

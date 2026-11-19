@@ -21,8 +21,16 @@ from swfactory.sandbox.paths import HOME, REPO
 
 OPENCODE_CACHE = "/opt/factory-engines/opencode-cache"
 OPENCODE_HOME_CACHE = "/home/factory/.cache/opencode"
-_GIT_READ = {"*": "deny", "git diff*": "allow", "git log*": "allow", "git show*": "allow",
-             "git status*": "allow"}  # fmt: skip
+_GIT_READ_SUBCOMMANDS = ("diff", "log", "show", "status")
+# Deny rules come after the allow rules: the last matching rule wins. They stop options that write
+# files or run programs (git diff --output=FILE, --ext-diff) and any shell chaining or redirection.
+_GIT_READ_DENY = ("*--output*", "*--ext-diff*", "*--open-files-in-pager*", "*;*", "*&*", "*|*",
+                  "*`*", "*$(*", "*>*", "*<*")  # fmt: skip
+_GIT_READ = {
+    "*": "deny",
+    **{p: "allow" for sub in _GIT_READ_SUBCOMMANDS for p in (f"git {sub}", f"git {sub} *")},
+    **{p: "deny" for p in _GIT_READ_DENY},
+}
 
 
 @dataclass

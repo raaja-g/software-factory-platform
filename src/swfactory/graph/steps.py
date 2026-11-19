@@ -262,6 +262,9 @@ _INSTRUCTION_DIRS = (".claude", ".opencode", ".gemini")
 def instruction_cleanup_argv(repo: str) -> list[str]:
     """One find that deletes every instruction file and engine config folder under repo.
 
+    Anything that is not a directory and has one of these names goes too, symlinks included (a
+    symlink named CLAUDE.md would otherwise be followed by the engine). rm never follows a link.
+
     No file name is ever read back or split (names can hold newlines): find runs rm itself."""
 
     def names(items: tuple[str, ...]) -> list[str]:
@@ -275,7 +278,7 @@ def instruction_cleanup_argv(repo: str) -> list[str]:
         "(", "-path", f"{repo}/.git", "-prune", ")",
         "-o", "(", "-type", "d", "(", *names(_INSTRUCTION_DIRS), ")", "-prune",
         "-exec", "rm", "-rf", "--", "{}", "+", ")",
-        "-o", "(", "-type", "f", "(", *names(_INSTRUCTION_FILES), ")",
+        "-o", "(", "!", "-type", "d", "(", *names(_INSTRUCTION_FILES + _INSTRUCTION_DIRS), ")",
         "-exec", "rm", "-f", "--", "{}", "+", ")",
     ]  # fmt: skip
 

@@ -35,3 +35,20 @@ def test_safe_error_never_carries_the_request_url():
     text = safe_error(Boom("GET http://gateway/key/info?key=sk-secret1234567890abcdef failed"))
     assert text == "Boom (HTTP 500)" and "sk-" not in text
     assert safe_error(ValueError("sk-secret1234567890abcdef")) == "ValueError"
+
+
+def test_symlinked_instruction_files_and_dirs_are_removed_and_targets_survive(tmp_path):
+    import os
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.md").write_text("keep")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    os.symlink(outside / "keep.md", repo / "CLAUDE.md")
+    os.symlink(outside, repo / ".claude")
+    os.symlink(outside / "keep.md", repo / "AGENTS.md")
+    done = subprocess.run(instruction_cleanup_argv(str(repo)), capture_output=True, text=True)
+    assert done.returncode == 0
+    assert not any(os.path.lexists(repo / n) for n in ("CLAUDE.md", ".claude", "AGENTS.md"))
+    assert (outside / "keep.md").read_text() == "keep"
