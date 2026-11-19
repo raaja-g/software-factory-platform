@@ -402,6 +402,28 @@ function actionButtons(job) {
   if (st === 'failed' && can('approver') && job.retry_offered) {
     out.push(h('div', { class: 'row' }, h('button', { class: 'btn primary', type: 'button', text: 'Retry job', on: { click: () => send('retry') } })));
   }
+  if (st === 'delivered' && job.pr_url && can('approver')) {
+    const fnote = h('textarea', { id: 'follow-up-note', 'aria-label': 'Follow-up note', placeholder: 'What should change on the pull request?' });
+    out.push(fnote);
+    out.push(h('div', { class: 'row' },
+      h('button', {
+        class: 'btn', type: 'button', text: 'Send back as a follow-up',
+        on: { click: async () => {
+          const t = fnote.value.trim();
+          if (!t) { msg.className = 'status-line err'; msg.textContent = 'Write a note for the follow-up.'; return; }
+          msg.className = 'status-line';
+          msg.textContent = 'Sending…';
+          try {
+            const r = await apiJson(jobPath(job, 'follow-up'), { json: { note: t } });
+            msg.textContent = `Queued ${r && r.ref ? r.ref : 'a follow-up'}`;
+            loadBoard();
+          } catch (e) {
+            msg.className = 'status-line err';
+            msg.textContent = e.message;
+          }
+        } },
+      })));
+  }
   if (can('submitter') && !TERMINAL.has(st)) {
     out.push(h('div', { class: 'row' },
       h('button', { class: 'btn danger', type: 'button', text: 'Cancel job', on: { click: () => send('cancel') } }),
@@ -722,7 +744,7 @@ async function showDefinition() {
     try {
       const out = await apiJson('/api/definition/sync', { json: {} });
       msg.className = 'status-line';
-      msg.textContent = `Synced ${String(out.active_sha || '').slice(0, 12)}`;
+      msg.textContent = out.active_sha ? `Synced ${String(out.active_sha).slice(0, 12)}` : 'Sync requested';
     } catch (e) { msg.className = 'status-line err'; msg.textContent = e.message; }
   } } }) : null;
   const rej = d.last_rejected;

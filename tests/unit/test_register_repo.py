@@ -273,3 +273,81 @@ async def test_a_busy_definition_repo_is_retried(env, tmp_path, session, repo_di
     deps = make_deps(env, tmp_path, FakeWriter(lock_once=True))
     await register_repo(session, repo=str(repo_dir("app")), requested_by="a", deps=deps)
     assert len(deps.writer.saved) == 1 and deps.writer.attempts == 2
+
+
+# -- GitHub repos (M8.7b) ----------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_gh():
+    from tests.fakes.github_api import FakeGhApi, mock_github
+
+    api = FakeGhApi()
+    with mock_github(api):
+        yield api
+
+
+@pytest.fixture
+def deps_gh(env, tmp_path, fake_gh):
+    from tests.fakes.github_api import StubAuth
+
+    from swfactory.apps import GitHubRepoInspector
+
+    d = make_deps(env, tmp_path)
+    d.inspector = GitHubRepoInspector(StubAuth())
+    return d
+
+
+async def test_github_repo_defaults(deps_gh, session):
+    app = await register_repo(session, repo="acme/web", requested_by="ana@x.io", deps=deps_gh)
+    path, content, _ = deps_gh.writer.saved[0]
+    assert path == "apps/web.yaml"
+    assert yaml.safe_load(content) == {
+        "repo_kind": "github",
+        "repo_url": "https://github.com/acme/web",
+        "default_branch": "trunk",
+        "merge_policy": "pr_auto_merge",
+        "profile": "team-gemini",
+        "runner": "standard",
+        "github": {"ci_safe": False},
+    }
+    assert app.merge_policy == MergePolicy.PR_AUTO_MERGE
+
+
+async def test_ci_safe_flag_is_recorded(deps_gh, session):
+    await register_repo(
+        session, repo="https://github.com/acme/web", ci_safe=True, requested_by="a", deps=deps_gh
+    )
+    assert yaml.safe_load(deps_gh.writer.saved[0][1])["github"] == {"ci_safe": True}
+
+
+async def test_default_registration_waits_for_approval_before_any_push(deps_gh, session):
+    from swfactory.domain.types import JobKind
+    from swfactory.queue import ci_requires_approval
+
+    app = await register_repo(session, repo="acme/web", requested_by="a", deps=deps_gh)
+    assert ci_requires_approval(app, JobKind.NORMAL) is True
+
+
+async def test_unreachable_repo_is_refused(deps_gh, fake_gh, session):
+    fake_gh.installed = False
+    with pytest.raises(RegisterError, match="add acme/web to the app installation"):
+        await register_repo(session, repo="acme/web", requested_by="a", deps=deps_gh)
+    assert deps_gh.writer.saved == []
+
+
+async def test_empty_github_repo_is_refused(deps_gh, fake_gh, session):
+    fake_gh.empty = True
+    with pytest.raises(
+        RegisterError, match="acme/web has no commits; create the first commit and run again"
+    ):
+        await register_repo(session, repo="acme/web", requested_by="a", deps=deps_gh)
+    assert deps_gh.writer.saved == []
+
+
+async def test_second_run_matches_the_url_ignoring_case(deps_gh, session):
+    first = await register_repo(session, repo="acme/web", requested_by="a", deps=deps_gh)
+    again = await register_repo(
+        session, repo="https://github.com/ACME/Web.git", requested_by="b", deps=deps_gh
+    )
+    assert again == first and len(deps_gh.writer.saved) == 1

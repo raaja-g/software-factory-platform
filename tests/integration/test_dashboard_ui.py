@@ -114,6 +114,16 @@ JOBS = [
     _job(8, "xss", "shop", "build", "build", title=XSS, files=["logs/build.log"]),
     _job(9, "done-one", "todo", "merged", "done", files=[]),
     _job(10, "budget-stop", "todo", "needs_human", "needs_human", gate_reason="budget", files=[]),
+    _job(
+        11,
+        "delivered-one",
+        "todo",
+        "delivered",
+        "done",
+        files=[],
+        pr_url="https://github.com/acme/web/pull/1",
+        merge_policy="pr_manual",
+    ),  # fmt: skip
 ]
 
 FILES: dict[str, dict[str, str]] = {
@@ -282,9 +292,19 @@ def install(page: Page, role: str, sse_status: int = 200) -> Rec:
     return r
 
 
+def _static_deps() -> Any:
+    from swfactory.api.app import ApiDeps
+
+    n: Any = SimpleNamespace()
+    return ApiDeps(
+        sessions=n, events=n, artifacts=n, catalog=n, definitions=n, users=n, writer=None,
+        settings=settings(),
+    )  # fmt: skip
+
+
 @pytest.fixture(scope="module")
 def base_url() -> Iterator[str]:
-    app = create_app(settings(), SimpleNamespace(), on_gce=lambda: False)  # pyright: ignore[reportArgumentType]
+    app = create_app(settings(), _static_deps(), on_gce=lambda: False)  # pyright: ignore[reportArgumentType]
     import socket
 
     with socket.socket() as sk:
@@ -688,3 +708,15 @@ def test_add_budget_on_budget_stop_for_admins(page, page_approver):
         "note": None,
         "amount_usd": "5",
     }
+
+
+def test_follow_up_button_only_on_delivered(page_approver):
+    open_card(page_approver, "011")
+    btn = page_approver.get_by_role("button", name="Send back as a follow-up")
+    assert btn.is_visible()
+    page_approver.get_by_label("Follow-up note").fill("rename X")
+    btn.click()
+    assert posted(page_approver, "/api/jobs/*/follow-up") == {"note": "rename X"}
+    page_approver.keyboard.press("Escape")
+    open_card(page_approver, "005")
+    assert page_approver.get_by_role("button", name="Send back as a follow-up").count() == 0

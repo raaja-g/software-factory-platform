@@ -103,20 +103,15 @@ def test_definition_sync_needs_admin():
     assert role_client("approver").post("/api/definition/sync").status_code == 403
 
 
-def test_definition_sync(monkeypatch):
-    async def ok(deps):
-        return "abc", {"demo": "added"}
+def test_definition_sync_notifies_and_returns_202(monkeypatch):
+    sent = []
 
-    monkeypatch.setattr(definition_routes, "sync_definition", ok)
+    async def notify(deps, payload):
+        sent.append(payload)
+
+    monkeypatch.setattr(definition_routes, "notify_sync", notify)
     r = cs.client_for().post("/api/definition/sync")
-    assert r.json() == {"active_sha": "abc", "apps": {"demo": "added"}}
-
-    async def bad(deps):
-        raise definition_routes.SyncError(["no way"])
-
-    monkeypatch.setattr(definition_routes, "sync_definition", bad)
-    r = cs.client_for().post("/api/definition/sync")
-    assert r.status_code == 422 and r.json()["detail"] == {"errors": ["no way"]}
+    assert r.status_code == 202 and sent == [{"reason": "api"}]
 
 
 def test_metrics_placeholder():

@@ -39,7 +39,7 @@ def make(deps: Deps):
             async with deps.sessions.begin() as s:
                 row = await s.get(Job, job_id)
                 if row is not None:
-                    row.branch = branch_name(job.seq, job.slug)
+                    row.branch = row.branch or branch_name(job.seq, job.slug)
                     row.base_sha = base_sha
             runner = defn.runners.get(app.runner)
             for cmd in runner.setup_commands if runner is not None else ():

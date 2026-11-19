@@ -65,6 +65,24 @@ def redact_processor(_logger: Any, _name: str, event_dict: Any) -> Any:
     return _walk(event_dict)
 
 
+class _CurrentStderrHandler(logging.StreamHandler):  # type: ignore[type-arg]
+    """Writes to whatever sys.stderr is now, not the one that existed when logging was set up.
+
+    A test runner (or any wrapper) can swap sys.stderr and close the old stream; a handler that
+    kept the old one would fail on every record and print a "Logging error" report instead."""
+
+    def __init__(self) -> None:
+        super().__init__(sys.stderr)
+
+    @property
+    def stream(self):  # type: ignore[override]
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, value: object) -> None:  # StreamHandler assigns it in __init__; ignored
+        pass
+
+
 def configure_logging(level: str = "INFO") -> None:
     timestamper = structlog.processors.TimeStamper(fmt="iso", utc=True)
     pre_chain: list[Any] = [
@@ -82,11 +100,13 @@ def configure_logging(level: str = "INFO") -> None:
             structlog.processors.JSONRenderer(),
         ],
     )
-    handler = logging.StreamHandler(sys.stderr)
+    handler = _CurrentStderrHandler()
     handler.setFormatter(formatter)
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level.upper())
+    for noisy in ("httpx", "httpcore"):  # request lines add nothing and can carry URLs
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     structlog.configure(
         processors=[
             *pre_chain,

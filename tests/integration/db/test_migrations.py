@@ -54,11 +54,11 @@ async def seed_job(url: str) -> str:
 
 async def test_upgrade_creates_schema(pg_url):
     assert (
-        await scalar(pg_url, "select version_num from app.alembic_version") == "m7_04_run_requests"
+        await scalar(pg_url, "select version_num from app.alembic_version") == "m8_03_github_intake"
     )
     assert await scalar(pg_url, "select to_regclass('app.artifacts_latest')") is not None
     assert await scalar(pg_url, "select count(*) from pg_namespace where nspname = 'lg'") == 1
-    assert upgrade_database(pg_url) == "m7_04_run_requests"  # idempotent
+    assert upgrade_database(pg_url) == "m8_03_github_intake"  # idempotent
 
 
 async def test_backlog_tables_columns_and_turn_function(pg_url):

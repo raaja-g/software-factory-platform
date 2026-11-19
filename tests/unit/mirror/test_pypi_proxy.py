@@ -92,3 +92,17 @@ def test_uploads_are_refused(served, method):
     with pytest.raises(urllib.error.HTTPError) as e:
         urllib.request.urlopen(req)
     assert e.value.code == 405
+
+
+WHEEL = "https://files.pythonhosted.org/packages/b7/ce/x/six-1.17.0-py2.py3-none-any.whl"
+
+
+def test_metadata_request_fetches_the_metadata_file_not_the_wheel():
+    # uv checks the PEP 658 metadata hash the index advertises; serving the wheel breaks installs
+    assert (
+        proxy.upstream_file_url(WHEEL, "six-1.17.0-py2.py3-none-any.whl.metadata")
+        == WHEEL + ".metadata"
+    )
+    assert proxy.upstream_file_url(WHEEL, "six-1.17.0-py2.py3-none-any.whl") == WHEEL
+    assert proxy.upstream_file_url(WHEEL + ".metadata", "x.whl.metadata") == WHEEL + ".metadata"
+    assert proxy.upstream_file_url(WHEEL, "") == WHEEL

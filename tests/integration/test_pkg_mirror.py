@@ -20,6 +20,12 @@ pytestmark = [
         "(set FACTORY_TEST_PKG_MIRROR=1)",
     ),
 ]
+STATUS_OF = (
+    "import sys, urllib.request as r, urllib.error as e\n"
+    "q = r.Request(sys.argv[2], data=b'{}', method=sys.argv[1])\n"
+    "try:\n    print(r.urlopen(q, timeout=10).status)\n"
+    "except e.HTTPError as x:\n    print(x.code)\n"
+)
 STD_DEFAULT = RunnerSpec("standard", "swfactory/runner:0.1.0", 2.0, 4096, 512, ())
 
 
@@ -62,22 +68,8 @@ async def test_publish_fails(provider, JOB):
         ("DELETE", "http://pkg-mirror:4873/@acme-test%2fpkg/-rev/1"),
         ("POST", "http://pkg-mirror:3141/root/pypi/"),
     ):
-        r = await box.exec(
-            [
-                "curl",
-                "-s",
-                "-o",
-                "/dev/null",
-                "-w",
-                "%{http_code}",
-                "-X",
-                method,
-                "--data",
-                "{}",
-                url,
-            ]
-        )
-        assert r.stdout in ("401", "403", "404", "405"), (method, r.stdout)
+        r = await box.exec(["python3", "-c", STATUS_OF, method, url])  # the image has no curl
+        assert r.stdout.strip() in ("401", "403", "404", "405"), (method, r.stdout)
 
 
 async def test_private_name_never_resolves_publicly(provider, JOB):

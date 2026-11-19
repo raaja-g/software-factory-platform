@@ -28,6 +28,7 @@ from swfactory.db.repo import latest_waiting, list_jobs
 from swfactory.db.tables import AgentRun, App, Backlog, Job, JobEvent
 from swfactory.definition.store import NoActiveDefinition
 from swfactory.domain.types import HumanAction, Stage
+from swfactory.github.followup import start_follow_up
 from swfactory.queue import UnknownApp, enqueue_job
 
 __all__ = [
@@ -411,6 +412,36 @@ async def post_action(
         },
     )
     return {"command_id": str(cid)}
+
+
+class FollowUpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    note: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _not_blank(self) -> FollowUpRequest:
+        if not self.note.strip():
+            raise ValueError("note must not be blank")
+        return self
+
+
+@router.post("/jobs/{ref}/follow-up", status_code=201)
+async def post_follow_up(
+    request: Request,
+    body: FollowUpRequest,
+    principal: Annotated[Principal, Depends(require("submitter"))],
+    ja: Annotated[JobAccess, Depends(job_access("approver"))],
+) -> dict[str, str]:
+    d = _deps(request)
+    try:
+        async with d.sessions.begin() as s:
+            new = await start_follow_up(
+                s, job_id=ja.job.id, note=body.note, requested_by=principal.email
+            )
+            out = {"job_id": str(new.id), "ref": format_job_ref(ja.app_slug, new.seq)}
+    except CommandRefused as e:
+        raise HTTPException(status_code=409, detail=str(e)) from None
+    return out
 
 
 @router.post("/jobs/{ref}/triage-correction", status_code=202)

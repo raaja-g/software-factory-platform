@@ -1,3 +1,6 @@
+import json
+
+import httpx
 import pytest
 from tests.unit.mirror.test_config import NPM_AR, NPM_GH, PY_TOK
 
@@ -5,6 +8,7 @@ from swfactory.logging import redact
 from swfactory.mirror.tokens import (
     TokenUnavailable,
     adc_access_token,
+    broker_packages_fetch,
     read_env_file,
     registry_token,
 )
@@ -51,3 +55,27 @@ def test_empty_adc_file_is_unavailable(tmp_path):
     p.write_text("")
     with pytest.raises(TokenUnavailable, match="no registry ADC"):
         adc_access_token(p)
+
+
+async def test_mirror_asks_the_broker_for_github_packages(respx_mock, tmp_path):
+    tf = tmp_path / "broker_token"
+    tf.write_text("s3cret")
+    url = "http://orchestrator:8091/internal/github-packages-token"
+    route = respx_mock.post(url).mock(return_value=httpx.Response(200, json={"token": "ghs_x"}))
+    fetch = broker_packages_fetch("http://orchestrator:8091", str(tf), "acme")
+    assert await registry_token(NPM_GH, env={}, adc=None, github=fetch) == "ghs_x"
+    req = route.calls[0].request
+    assert req.headers["authorization"] == "Bearer s3cret"
+    assert json.loads(req.content) == {"org": "acme"}
+
+
+async def test_unreachable_broker_is_token_unavailable(respx_mock, tmp_path):
+    tf = tmp_path / "t"
+    tf.write_text("x")
+    respx_mock.post("http://b/internal/github-packages-token").mock(
+        return_value=httpx.Response(403)
+    )
+    with pytest.raises(TokenUnavailable):
+        await registry_token(
+            NPM_GH, env={}, adc=None, github=broker_packages_fetch("http://b", str(tf), "acme")
+        )

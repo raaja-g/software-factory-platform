@@ -89,3 +89,11 @@ def test_add_budget_posts_amount(mock_api):
 
 def test_add_budget_rejects_bad_amount():
     assert run("jobs", "add-budget", "todo:1", "-2").exit_code == 2
+
+
+def test_cli_follow_up(mock_api):
+    from tests.unit.cli.conftest import ID2
+
+    r = run("jobs", "follow-up", "demo-gh:001", "rename X")
+    assert r.stdout.strip() == f"queued demo-gh:002 {ID2}"
+    assert mock_api.bodies[-1] == {"note": "rename X"}

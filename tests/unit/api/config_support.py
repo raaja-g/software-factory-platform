@@ -72,12 +72,13 @@ class FakeWriter:
     paths: list[str] = field(default_factory=list)
     fail: bool = False
     mode: str = "commit"
+    sha: str = "c0ffee"
 
     async def save_file(self, path, content, *, message, author):
         if self.fail:
             raise DefinitionWriteError("dirty")
         self.paths.append(path)
-        sha = "c0ffee" if self.mode == "commit" else None
+        sha = self.sha if self.mode == "commit" else None
         return SaveResult(self.mode, sha, None if sha else "https://gh/pr/1")  # pyright: ignore[reportArgumentType]
 
 

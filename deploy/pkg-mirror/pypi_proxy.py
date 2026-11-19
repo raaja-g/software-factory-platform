@@ -88,6 +88,17 @@ def dec(token: str) -> str:
     return base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)).decode()
 
 
+def upstream_file_url(url: str, filename: str) -> str:
+    """The upstream URL to fetch for a /+f/ request.
+
+    The index advertises a PEP 658 metadata file next to each wheel (<wheel>.metadata) with its own
+    hash, and clients such as uv check it. Fetching the wheel for that request makes the hash
+    mismatch, so a request for <name>.metadata fetches the upstream's <wheel>.metadata."""
+    if filename.endswith(".metadata") and not url.endswith(".metadata"):
+        return url + ".metadata"
+    return url
+
+
 def rewrite(page: str, page_url: str, route_id: str) -> str:
     def sub(m: re.Match) -> str:
         absolute = urljoin(page_url, m.group(2).split("#", 1)[0])
@@ -167,7 +178,8 @@ class Handler(BaseHTTPRequestHandler):
             )
             if not allowed or urlsplit(url).scheme != "https":
                 return self._send(403)
-            code, ctype, body = fetch(url, route, accept="*/*")
+            fname = parts[2] if len(parts) > 2 else ""
+            code, ctype, body = fetch(upstream_file_url(url, fname), route, accept="*/*")
             return self._send(code if code in (200, 404) else 502, ctype, body)
         self._send(404)
 

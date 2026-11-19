@@ -244,6 +244,33 @@ async def test_cancel_stops_running_job(seeded):
     assert (await job()).lease_owner is None
 
 
+async def deliver_job():
+    """Leave the job in stage delivered with an open PR, as the delivery step does."""
+    async with ctx.sessions.begin() as s:
+        await s.execute(
+            text(
+                "update app.jobs set stage = 'delivered', "
+                "pr_url = 'https://github.com/acme/web/pull/1'"
+            )
+        )
+
+
+async def test_cancel_delivered_job_withdraws_the_pr(seeded):
+    await deliver_job()
+    await insert_cmd("cancel")
+    await work("happy.yaml")
+    assert (await job()).stage == "cancelled"
+    assert ctx.deps.git.calls[-1] == "withdraw"
+
+
+async def test_cancel_survives_withdraw_error(seeded, monkeypatch):
+    monkeypatch.setattr(worker_mod, "FakeGitService", partial(FakeGitService, fail_on="withdraw"))
+    await deliver_job()
+    await insert_cmd("cancel")
+    await work("happy.yaml")
+    assert (await job()).stage == "cancelled"
+
+
 async def test_cancel_survives_keep_branch_error(seeded, monkeypatch):
     monkeypatch.setattr(
         worker_mod, "FakeGitService", partial(FakeGitService, fail_on="keep_branch")

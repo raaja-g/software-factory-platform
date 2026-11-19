@@ -1,3 +1,6 @@
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 import yaml
 from tests.unit.api import config_support as cs
@@ -44,20 +47,57 @@ def fake_writer():
 
 
 @pytest.fixture
-def fake_sync(monkeypatch):
-    class Sync:
-        sha = "feedbeef"
+def fake_notify(monkeypatch):
+    class Notify:
+        channels: list[str] = []
+        payloads: list[dict] = []
 
-    async def fake(deps):
-        return Sync.sha, {}
+    n = Notify()
+    n.channels, n.payloads = [], []
 
-    monkeypatch.setattr(definition_routes, "sync_definition", fake)
-    return Sync
+    async def notify(deps, payload):
+        n.channels.append("definition_sync")
+        n.payloads.append(payload)
+
+    monkeypatch.setattr(definition_routes, "notify_sync", notify)
+
+    async def position(deps):
+        return 7
+
+    monkeypatch.setattr(definition_routes, "stream_position_now", position)
+    return n
 
 
 @pytest.fixture
-def client_admin(fake_writer, fake_sync):
-    return cs.client_for(writer=fake_writer)
+def fake_store():
+    class Store:
+        saves: list = []
+
+    s = Store()
+    s.saves = []
+    return s
+
+
+@pytest.fixture
+def fake_events(monkeypatch, fake_writer):
+    """Delivers definition.loaded {sha: fake_writer.sha}; `silent` makes it never arrive."""
+
+    class Events:
+        silent = False
+
+        async def subscribe(self, *, after_id=None, **kw):
+            assert after_id == 7
+            if self.silent:
+                await asyncio.sleep(3600)
+            yield SimpleNamespace(kind="other", data={})
+            yield SimpleNamespace(kind="definition.loaded", data={"sha": fake_writer.sha})
+
+    return Events()
+
+
+@pytest.fixture
+def client_admin(fake_writer, fake_notify, fake_events):
+    return cs.client_for(writer=fake_writer, events=fake_events)
 
 
 def test_unavailable_alias_rejected():
@@ -109,7 +149,7 @@ def test_fallback_and_tiers_checked():
     assert unavailable_aliases(p, cs.CATALOG) == ["x@v", "y@v"]
 
 
-def test_put_profile_422_lists_disabled_alias(fake_writer, fake_sync):
+def test_put_profile_422_lists_disabled_alias(fake_writer, fake_notify):
     models = [m for m in cs.CATALOG if m.alias != "claude-sonnet@vertex"] + [
         cs.info("claude-sonnet@vertex", available=False)
     ]
@@ -142,25 +182,36 @@ def test_put_profile_needs_admin(fake_writer):
     assert put_profile(c, "team-gemini", OK_YAML).status_code == 403
 
 
-def test_put_profile_personal_commits_and_syncs(client_admin, fake_writer, fake_sync):
+def test_api_sync_only_notifies_in_personal_mode_too(client_admin, fake_notify, fake_store):
+    assert client_admin.post("/api/definition/sync").status_code == 202
+    assert fake_notify.channels == ["definition_sync"] and fake_store.saves == []
+
+
+def test_profile_save_waits_for_the_worker_sync(
+    client_admin, fake_writer, fake_notify, fake_events
+):
     r = put_profile(client_admin, "team-gemini", OK_YAML)
-    assert r.status_code == 200, r.text
+    assert (r.status_code, r.json()["active_sha"], fake_notify.channels) == (
+        200,
+        fake_writer.sha,
+        ["definition_sync"],
+    )
     assert fake_writer.paths == ["profiles/team-gemini.yaml"]
-    assert r.json()["active_sha"] == fake_sync.sha
 
 
-def test_put_profile_writer_conflict_409(fake_sync):
+def test_profile_save_times_out_with_202(fake_writer, fake_notify, fake_events, monkeypatch):
+    from swfactory.api.routes import profiles
+
+    monkeypatch.setattr(profiles, "LOADED_TIMEOUT_S", 0.05)
+    fake_events.silent = True
+    c = cs.client_for(writer=fake_writer, events=fake_events)
+    r = put_profile(c, "team-gemini", OK_YAML)
+    assert r.status_code == 202 and r.json()["active_sha"] is None
+
+
+def test_put_profile_writer_conflict_409(fake_notify):
     c = cs.client_for(writer=cs.FakeWriter(fail=True))
     assert put_profile(c, "team-gemini", OK_YAML).status_code == 409
-
-
-def test_put_profile_sync_failure_422(fake_writer, monkeypatch):
-    async def boom(deps):
-        raise definition_routes.SyncError(["bad"])
-
-    monkeypatch.setattr(definition_routes, "sync_definition", boom)
-    r = put_profile(cs.client_for(writer=fake_writer), "team-gemini", OK_YAML)
-    assert r.status_code == 422 and r.json()["detail"]["errors"] == ["bad"]
 
 
 def test_server_without_writer_501():

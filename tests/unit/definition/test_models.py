@@ -4,9 +4,12 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from swfactory.definition.models import (
+    AppDef,
     DefinitionPolicy,
+    GitHubAppSettings,
     definition_json_schema,
     validate_definition,
 )
@@ -314,3 +317,15 @@ def test_schema_file_is_current():
     s = definition_json_schema()
     assert json.loads(Path("schema/definition.schema.json").read_text()) == s
     assert s["additionalProperties"] is False and "schemaVersion" in s["properties"]
+
+
+def test_github_settings_defaults_and_local_refused():
+    gh = AppDef(repo_kind="github", repo_url="acme/web")
+    assert gh.github == GitHubAppSettings(
+        merge_method="squash", intake_label="factory", approvers=(), ci_safe=False
+    )
+    ok = AppDef(repo_kind="github", repo_url="acme/web", github={"merge_method": "merge"})  # type: ignore[arg-type]
+    assert ok.github.merge_method == "merge"
+    with pytest.raises(ValidationError, match="github"):
+        AppDef(repo_kind="local", repo_url="x", github={"merge_method": "merge"})  # type: ignore[arg-type]
+    assert AppDef(repo_kind="local", repo_url="x").github == GitHubAppSettings()

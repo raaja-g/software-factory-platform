@@ -221,7 +221,18 @@ def build_run_deps(settings: Any, definitions: Any) -> RunDeps | None:
         await definitions.save(result)
         return result.definition
 
-    register = RegisterDeps.from_settings(settings, LocalGitDefinitionWriter(Path(source)), sync)
+    inspector = None
+    if settings.github_app_client_id or settings.github_token:
+        from swfactory.apps import GitHubRepoInspector
+        from swfactory.github.auth import make_auth
+
+        try:
+            inspector = GitHubRepoInspector(make_auth(settings))
+        except ValueError:
+            inspector = None  # bad GitHub settings: GitHub repos stay refused
+    register = RegisterDeps.from_settings(
+        settings, LocalGitDefinitionWriter(Path(source)), sync, inspector
+    )
     return RunDeps(register)
 
 

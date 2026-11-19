@@ -47,6 +47,10 @@ IDENTITY = {
 class GitError(RuntimeError): ...
 
 
+async def _box_git(box: Sandbox, *args: str, cwd: str = REPO):  # noqa: ANN202
+    return await box.exec(safe_git(*args), cwd=cwd, env=SAFE_GIT_ENV)
+
+
 def _host_env() -> dict[str, str]:
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin")}
     env.update(SAFE_GIT_ENV)
@@ -72,6 +76,32 @@ async def _ok(args: Sequence[str], cwd: Path) -> str:
     if rc != 0:
         raise GitError(f"git {args[0]} failed: {err.strip() or out.strip()}")
     return out.strip()
+
+
+async def sandbox_diff_stat(box: Sandbox, base: str) -> DiffStat:
+    """Files and lines the sandbox repo's HEAD changed since ``base``."""
+    r = await _box_git(
+        box,
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--numstat",
+        "-z",
+        "--no-renames",
+        f"{base}...HEAD",
+    )
+    if r.exit_code != 0:
+        raise GitError(f"diff failed: {r.stderr.strip()}")
+    ins = dels = 0
+    paths: list[str] = []
+    for rec in r.stdout.split("\0"):
+        if not rec:
+            continue
+        a, d, path = rec.split("\t", 2)
+        ins += 0 if a == "-" else int(a)
+        dels += 0 if d == "-" else int(d)
+        paths.append(path)
+    return DiffStat(len(paths), ins, dels, tuple(paths))
 
 
 class LocalGit(GitService):
@@ -255,28 +285,7 @@ class LocalGit(GitService):
         return True
 
     async def diff_stat(self, box: Sandbox, base: str) -> DiffStat:
-        r = await self._box_git(
-            box,
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--numstat",
-            "-z",
-            "--no-renames",
-            f"{base}...HEAD",
-        )
-        if r.exit_code != 0:
-            raise GitError(f"diff failed: {r.stderr.strip()}")
-        ins = dels = 0
-        paths: list[str] = []
-        for rec in r.stdout.split("\0"):
-            if not rec:
-                continue
-            a, d, path = rec.split("\t", 2)
-            ins += 0 if a == "-" else int(a)
-            dels += 0 if d == "-" else int(d)
-            paths.append(path)
-        return DiffStat(len(paths), ins, dels, tuple(paths))
+        return await sandbox_diff_stat(box, base)
 
     async def _pull_branch(self, job: Job, app: AppDef, box: Sandbox, branch: str) -> str:
         """Bundle the job branch in the sandbox and fetch it into the bare repo."""

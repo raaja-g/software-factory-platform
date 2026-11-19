@@ -63,10 +63,11 @@ def def_sync(
 ):
     """Load a definition and make it the active one."""
     settings = get_settings()
-    src = source or settings.definition_source
-    if not src:
-        typer.echo("no source given and FACTORY_DEFINITION is not set")
-        raise typer.Exit(1)
+    if source is None:  # the orchestrator (which holds the App key) syncs FACTORY_DEFINITION
+        _api_call(lambda c: c.sync_definition())
+        typer.echo("sync requested; the orchestrator loads FACTORY_DEFINITION")
+        return
+    src = source
     result = load_definition(src, ref=ref, mode=settings.mode)
     if result.errors:
         for e in result.errors:
@@ -136,6 +137,51 @@ def apps_list():
     for a in _api_call(lambda c: c.list_apps()):
         mp = a.get("merge_policy") or ""
         typer.echo(f"{a['slug']}  {a['repo_kind']}  {mp}  {a['profile']}")
+
+
+@apps_app.command("create")
+def apps_create(
+    slug: Annotated[str, typer.Argument(help="App slug for the definition")],
+    github: Annotated[str, typer.Option("--github", help="<owner>/<name> of the new repo")],
+    template: Annotated[
+        str | None, typer.Option("--template", help="<owner>/<repo> to generate from")
+    ] = None,
+    public: Annotated[bool, typer.Option("--public", help="Create a public repo")] = False,
+):
+    """Create a GitHub repo with auto-merge on and print the apps: block to add."""
+    from swfactory.github.auth import make_auth
+    from swfactory.gitops.github import provision_repo
+
+    for value in (github, template):
+        if value is not None and (value.count("/") != 1 or not all(value.split("/"))):
+            typer.echo(f"expected <owner>/<name>, got {value!r}")
+            raise typer.Exit(2)
+    try:
+        auth = make_auth(get_settings())
+        result = asyncio.run(
+            provision_repo(auth, full_name=github, template=template, private=not public)
+        )
+    except Exception as e:  # noqa: BLE001 - one readable line for any GitHub or auth failure
+        typer.echo(f"cannot create {github}: {e}")
+        raise typer.Exit(1) from None
+    typer.echo(f"created: {result.url}")
+    typer.echo(
+        "Add this to the definition repo through a pull request:\n\n"
+        "apps:\n"
+        f"  {slug}:\n"
+        "    repo_kind: github\n"
+        f"    repo_url: {result.url}\n"
+        f"    default_branch: {result.default_branch}\n"
+        "    merge_policy: pr_auto_merge\n"
+        "    github: {ci_safe: true}\n\n"
+        "Set ci_safe to false if organization secrets are available to this repo."
+    )
+    if not result.reachable:
+        typer.echo(
+            f"installation: not reachable. Please add {result.full_name} to the app installation."
+        )
+        raise typer.Exit(2)
+    typer.echo("installation: reachable")
 
 
 def _apps_list_direct() -> None:
@@ -717,6 +763,20 @@ def jobs_rework(
         typer.echo("rework needs a note")
         raise typer.Exit(2)
     _job_action("rework", job, text, by)
+
+
+@jobs_app.command("follow-up")
+def jobs_follow_up(
+    job: Annotated[str, typer.Argument(help="Job uuid or <app>:<seq>")],
+    note: Annotated[str, typer.Argument(metavar="NOTE", help="What should change on the PR")],
+):
+    """Send a delivered job back as a follow-up job on its open PR."""
+    if not note.strip():
+        typer.echo("a follow-up needs a note")
+        raise typer.Exit(2)
+    ref = _norm_ref(job)
+    out = _api_call(lambda c: c.follow_up(ref, note))
+    typer.echo(f"queued {out['ref']} {out['job_id']}")
 
 
 @jobs_app.command("add-budget")

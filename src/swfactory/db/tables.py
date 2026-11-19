@@ -166,6 +166,7 @@ class Job(Base):
     backlog_pos: Mapped[int | None] = mapped_column(Integer)
     backlog_skipped: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     pr_url: Mapped[str | None] = mapped_column(Text)
+    head_sha: Mapped[str | None] = mapped_column(Text)
     budget_usd: Mapped[Decimal] = _money(nullable=False)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), server_default=text("0"))
     lease_owner: Mapped[str | None] = mapped_column(Text)
@@ -178,6 +179,10 @@ class Job(Base):
     updated_at: Mapped[datetime] = _ts()
     finished_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
     error: Mapped[str | None] = mapped_column(Text)
+    pushed_sha: Mapped[str | None] = mapped_column(Text)
+    merge_request_id: Mapped[str | None] = mapped_column(Text)
+    require_human_approval: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    follow_up_of: Mapped[uuid.UUID | None] = _fk("app.jobs.id")
     __table_args__ = (
         UniqueConstraint("app_id", "seq", name="jobs_app_id_seq_key"),
         UniqueConstraint("backlog_id", "backlog_pos", name="jobs_backlog_id_backlog_pos_key"),
@@ -370,6 +375,7 @@ class Command(Base):
     head_sha: Mapped[str | None] = mapped_column(Text)
     gate_event_id: Mapped[int | None] = mapped_column(BigInteger)
     amount_usd: Mapped[Decimal | None] = _money()
+    source_ref: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _ts()
     consumed_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
     result: Mapped[Any | None] = _jsonb()
@@ -380,6 +386,12 @@ class Command(Base):
             name="commands_amount_usd_check",
         ),
         Index("commands_job_id_created_at_idx", "job_id", "created_at"),
+        Index(
+            "commands_source_ref_uq",
+            "source_ref",
+            unique=True,
+            postgresql_where=text("source_ref IS NOT NULL"),
+        ),
     )
 
 
@@ -458,3 +470,38 @@ class RunRequest(Base):
             name="run_requests_status_check",
         ),
     )
+
+
+class AutomationFire(Base):
+    __tablename__ = "automation_fires"
+    automation: Mapped[str] = mapped_column(Text, primary_key=True)
+    fire_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), primary_key=True)
+    job_id: Mapped[uuid.UUID | None] = _fk("app.jobs.id")
+
+
+class WebhookDelivery(Base):
+    __tablename__ = "webhook_deliveries"
+    source: Mapped[str] = mapped_column(Text, primary_key=True)
+    delivery_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    received_at: Mapped[datetime] = _ts()
+
+
+class GithubPollState(Base):
+    __tablename__ = "github_poll_state"
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    etag: Mapped[str | None] = mapped_column(Text)
+    polled_at: Mapped[datetime] = _ts()
+
+
+class IssueIntake(Base):
+    __tablename__ = "issue_intakes"
+    repo: Mapped[str] = mapped_column(Text, primary_key=True)
+    issue_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    labeled_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), primary_key=True)
+    labeled_by: Mapped[str] = mapped_column(Text)
+    author: Mapped[str] = mapped_column(Text)
+    author_permission: Mapped[str] = mapped_column(Text)
+    labeler_permission: Mapped[str] = mapped_column(Text)
+    job_id: Mapped[uuid.UUID | None] = _fk("app.jobs.id")
+    created_at: Mapped[datetime] = _ts()
+    reported_at: Mapped[datetime | None] = _ts(nullable=True, default=False)

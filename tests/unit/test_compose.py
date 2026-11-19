@@ -332,3 +332,41 @@ def test_mirror_entrypoints_exist_and_are_valid_shell():
 @pytest.mark.parametrize("name", ["api", "orchestrator"])
 def test_notification_webhook_reaches_the_services_that_send_notices(name):
     assert "FACTORY_NOTIFY_WEBHOOK_URL" in svc(name)["environment"]
+
+
+def test_compose_gitops_net_has_no_services():
+    doc = yaml.safe_load(Path("compose.yaml").read_text())
+    net = doc["networks"]["gitops-net"]
+    assert net["name"] == "gitops-net" and not net.get("internal", False)
+    joined = [n for n, s in doc["services"].items() if "gitops-net" in (s.get("networks") or [])]
+    assert joined == []
+
+
+def _secret_names(s: dict) -> set[str]:
+    return {x if isinstance(x, str) else x.get("source") for x in s.get("secrets", [])}
+
+
+def test_app_key_only_in_orchestrator():
+    c = compose()
+    holders = {n for n, s in c["services"].items() if "github_app_key" in _secret_names(s)}
+    assert holders == {"orchestrator"}
+    assert "8091" not in str(c["services"]["orchestrator"].get("ports", []))
+    assert not any("8091" in str(s.get("ports", [])) for s in c["services"].values())
+
+
+def test_broker_token_in_orchestrator_and_api_only():
+    c = compose()
+    holders = {n for n, s in c["services"].items() if "broker_token" in _secret_names(s)}
+    assert holders == {"orchestrator", "api", "pkg-mirror-auth"}  # M8.10b: sidecar asks the broker
+
+
+def test_make_up_creates_broker_token():
+    mk = Path("Makefile").read_text()
+    assert "secrets/broker_token" in mk and "secrets/api_token" in mk
+
+
+def test_sidecar_holds_the_broker_token_but_not_the_app_key():
+    a = compose()["services"]["pkg-mirror-auth"]
+    assert "broker_token" in a["secrets"] and "github_app_key" not in a["secrets"]
+    assert "core-net" in a["networks"] and "mirror-net" in a["networks"]
+    assert a["environment"]["FACTORY_BROKER_URL"] == "http://orchestrator:8091"

@@ -13,6 +13,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from swfactory.db.tables import App, Job
+from swfactory.definition.models import AppDef
 from swfactory.definition.store import NoActiveDefinition, load_active
 from swfactory.domain.types import ACTIVE_STAGES, JobKind, Stage
 from swfactory.events import record_event
@@ -40,6 +41,11 @@ def branch_name(seq: int, slug: str) -> str:
     return f"factory/{seq:03d}-{slug}"
 
 
+def ci_requires_approval(app: AppDef, kind: JobKind) -> bool:
+    """A normal job of a github app that is not ci_safe waits for a person before any push."""
+    return kind == JobKind.NORMAL and app.repo_kind == "github" and not app.github.ci_safe
+
+
 async def enqueue_job(
     s: AsyncSession,
     *,
@@ -57,10 +63,14 @@ async def enqueue_job(
     definition_sha: str | None = None,
     backlog_id: UUID | None = None,
     backlog_pos: int | None = None,
+    require_human_approval: bool = False,
+    follow_up_of: UUID | None = None,
 ) -> Job:
     """Insert a queued job in the caller's transaction; never commits."""
     if backlog_pos is not None and backlog_id is None:
         raise ValueError("backlog_pos needs backlog_id")
+    if (branch is not None or base_sha is not None) and follow_up_of is None:
+        raise ValueError("branch and base_sha are only for follow-up jobs")
     found = await load_active(s)
     if found is None:
         raise NoActiveDefinition("no active definition")
@@ -103,6 +113,8 @@ async def enqueue_job(
         budget_usd=budget,
         backlog_id=backlog_id,
         backlog_pos=backlog_pos,
+        require_human_approval=require_human_approval or ci_requires_approval(app_def, kind),
+        follow_up_of=follow_up_of,
     )
     s.add(job)
     await s.flush()
@@ -217,8 +229,14 @@ async def _try_claim(
             held = await s.scalar(
                 text(
                     f"SELECT count(*) FROM app.jobs WHERE app_id = CAST(:a AS uuid) "
-                    f"AND kind IN {_NORMAL_KINDS} AND lease_owner IS NOT NULL "
-                    "AND lease_until > now()"
+                    f"AND kind IN {_NORMAL_KINDS} AND ((lease_owner IS NOT NULL "
+                    "AND lease_until > now())"
+                    + (
+                        " OR (kind = 'normal' AND stage = 'delivered')"
+                        if app_def.hold_slot_while_pr_open
+                        else ""
+                    )
+                    + ")"
                 ),
                 {"a": app_id},
             )

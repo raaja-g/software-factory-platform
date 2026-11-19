@@ -10,7 +10,13 @@ from swfactory.graph.deps import Deps
 from swfactory.graph.nodes import enter_stage, job_uuid, merged
 from swfactory.graph.routing import route_after_verify, transition
 from swfactory.graph.state import JobState, ReviewOutcome, ReviewTask
-from swfactory.graph.steps import _runner, job_sandbox, pinned_definition, step_timeout_s
+from swfactory.graph.steps import (
+    _runner,
+    job_sandbox,
+    pinned_definition,
+    refresh_head,
+    step_timeout_s,
+)
 from swfactory.models.triage import reviewers_for, triage_from_json
 from swfactory.sandbox.base import running
 from swfactory.verify.gate import GateResult, VerifyGate
@@ -58,6 +64,8 @@ def make(deps: Deps):
                 test_timeout_s=step_timeout_s(defn, VERIFY_TIMEOUT_KEY),
                 trailers=trailers,
             )
+        async with running(box):  # the gate rebased the branch: the shown head follows it
+            await refresh_head(deps, job_id, box)
         update: dict = {
             "verify_status": result.status.value,
             "verify_reason": result.reason,

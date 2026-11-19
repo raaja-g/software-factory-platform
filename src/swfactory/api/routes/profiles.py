@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
 from swfactory.api.auth import Principal, require
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
     from swfactory.api.app import ApiDeps
 
 router = APIRouter()
+LOADED_TIMEOUT_S = 30.0
 
 
 def _support(engine: str, info: ModelInfo) -> EngineSupport:
@@ -161,9 +163,14 @@ async def put_profile(
         "pr_url": getattr(saved, "pr_url", None),
         "active_sha": None,
     }
-    if settings.mode is FactoryMode.PERSONAL:
-        try:
-            out["active_sha"], _ = await definition_routes.sync_definition(deps)
-        except definition_routes.SyncError as e:
-            raise HTTPException(status_code=422, detail={"errors": e.errors}) from None
+    sha = out["sha"]
+    if settings.mode is FactoryMode.PERSONAL and sha:
+        after = await definition_routes.stream_position_now(deps)
+        await definition_routes.notify_sync(deps, {"reason": "profile"})
+        if await definition_routes.wait_loaded(
+            deps, sha, after_id=after, timeout_s=LOADED_TIMEOUT_S
+        ):
+            out["active_sha"] = sha
+        else:
+            return JSONResponse(out, status_code=202)  # type: ignore[return-value]
     return out

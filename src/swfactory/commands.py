@@ -51,6 +51,7 @@ def to_resume(
     by: str,
     retry_offered: bool,
     command_id: UUID | None = None,
+    head_sha: str | None = None,
 ) -> Command | None:
     """The graph resume for a gate action; None for cancel (the worker stops the job)."""
     if action == HumanAction.CANCEL:
@@ -67,6 +68,7 @@ def to_resume(
             "note": (note or "").strip(),
             "by": by,
             "command_id": str(command_id) if command_id else "",
+            "head_sha": head_sha,
         }
     )
 
@@ -121,17 +123,24 @@ async def submit_command(
     amount_usd: Decimal | None = None,
 ) -> UUID:
     """The single entry point for human actions (API, CLI, PR comments); never commits."""
-    from swfactory.db.repo import insert_command, latest_waiting, lock_job
+    from swfactory.db.repo import (
+        command_by_source_ref,
+        insert_command,
+        latest_waiting,
+        lock_job,
+    )
     from swfactory.db.tables import Job
     from swfactory.graph.build import GRAPH_VERSION
 
-    if source_ref is not None:
-        raise ValueError("source_ref is not supported yet")
     if action is not HumanAction.ADD_BUDGET and amount_usd is not None:
         raise CommandRefused("only add_budget takes an amount")
     if action is HumanAction.ADD_BUDGET and (amount_usd is None or amount_usd <= 0):
         raise CommandRefused("add_budget needs an amount above zero")
     await lock_job(s, job_id)
+    if source_ref is not None:  # a repeated comment is the same command, never a second row
+        existing = await command_by_source_ref(s, source_ref)
+        if existing is not None:
+            return existing
     job = await s.get(Job, job_id, populate_existing=True)
     if job is None:
         raise CommandRefused("no such job")
@@ -179,6 +188,7 @@ async def submit_command(
         head_sha=head_sha,
         gate_event_id=wait_id,
         amount_usd=amount_usd,
+        source_ref=source_ref,
     )
 
 

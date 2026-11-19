@@ -19,9 +19,11 @@ from swfactory.definition.models import AppDef, Definition
 from swfactory.definition.store import load_active
 from swfactory.definition.writer import DefinitionWriteError, DefinitionWriter
 from swfactory.events import record_event
+from swfactory.github.client import GitHubClient, GitHubError, MutationQueue
 from swfactory.gitops.folder import FolderError, FolderRepo
 
 if TYPE_CHECKING:
+    from swfactory.github.auth import GitHubAuth
     from swfactory.settings import Settings
 
 _GH_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -86,6 +88,35 @@ class RegisterDeps:
         inspector: RepoInspector | None = None,
     ) -> RegisterDeps:
         return cls(writer, FolderRepo.from_settings(settings), settings, inspector, sync)
+
+
+class GitHubRepoInspector:
+    """Reads a GitHub repo's reachability, default branch and emptiness (read calls only)."""
+
+    def __init__(self, auth: GitHubAuth) -> None:
+        self._auth = auth
+        self._queue = MutationQueue()
+
+    async def inspect(self, full_name: str) -> RepoInfo:
+        client = GitHubClient(self._auth, full_name, self._queue)
+        try:
+            if not await client.installation_reachable():
+                return RepoInfo(False, None, False)
+            data = await client.get_repo()
+            if data is None:
+                return RepoInfo(False, None, False)
+            branch = str(data.get("default_branch") or "") or None
+            empty = False
+            if branch:
+                try:
+                    empty = await client.branch_sha(branch) is None
+                except GitHubError as exc:
+                    if exc.status != 409:  # 409: "Git Repository is empty"
+                        raise
+                    empty = True
+            return RepoInfo(True, branch, empty)
+        finally:
+            await client.aclose()
 
 
 def _github(owner: str, name: str) -> RepoRef:
@@ -207,7 +238,12 @@ async def register_repo(
             raise RegisterError("GitHub repos need the GitHub App (not set up yet)")
         info = await deps.inspector.inspect(ref.full_name or "")
         if not info.reachable:
-            raise RegisterError(f"the GitHub App cannot reach {ref.full_name}")
+            raise RegisterError(f"add {ref.full_name} to the app installation")
+        if info.empty:
+            # creating the first commit would push to the repo before anyone approved
+            raise RegisterError(
+                f"{ref.full_name} has no commits; create the first commit and run again"
+            )
         body = {
             "repo_kind": "github",
             "repo_url": ref.url,

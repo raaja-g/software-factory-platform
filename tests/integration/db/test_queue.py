@@ -273,3 +273,34 @@ def test_cli_jobs_create_and_list(pg_url, sessions, tmp_path, monkeypatch, api_e
         "/health",
         "endpoint",
     ]  # ref, stage, title
+
+
+async def test_enqueue_on_ci_unsafe_github_app_requires_approval(sessions):
+    gh = {
+        "repo_kind": "github",
+        "repo_url": "https://github.com/acme/web",
+        "merge_policy": "pr_manual",
+    }
+    await activate(sessions, apps={"gh-unsafe": gh, "gh-safe": {**gh, "github": {"ci_safe": True}}})
+    async with sessions.begin() as s:
+        job = await enqueue_job(
+            s,
+            app_slug="gh-unsafe",
+            feature="Add X",
+            title=None,
+            source="cli",
+            source_ref=None,
+            requested_by="ann@x.io",
+        )
+        safe = await enqueue_job(
+            s,
+            app_slug="gh-safe",
+            feature="Add X",
+            title=None,
+            source="cli",
+            source_ref=None,
+            requested_by="ann@x.io",
+            follow_up_of=job.id,
+        )
+    assert job.require_human_approval is True and job.follow_up_of is None
+    assert safe.require_human_approval is False and safe.follow_up_of == job.id

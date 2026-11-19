@@ -8,7 +8,9 @@ import shutil
 import stat
 import subprocess
 import tempfile
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from contextvars import ContextVar
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -435,8 +437,25 @@ def _is_url(source: str) -> bool:
     return "://" in source or re.match(r"^[\w.-]+@[\w.-]+:", source) is not None
 
 
+@dataclass(frozen=True)
+class GitFetch:
+    """Hardened git options for fetching a remote definition: ``-c`` args and an env.
+
+    The env (which may hold ``GIT_TOKEN``) replaces the process env, so nothing else leaks in."""
+
+    args: tuple[str, ...] = ()
+    env: Mapping[str, str] = field(default_factory=dict)
+
+
+GIT_FETCH: ContextVar[GitFetch | None] = ContextVar("definition_git_fetch", default=None)
+
+
 def _git_env() -> dict[str, str]:
-    env = dict(os.environ)
+    fetch = GIT_FETCH.get()
+    if fetch is not None:
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), **fetch.env}
+    else:
+        env = dict(os.environ)
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["GIT_ALLOW_PROTOCOL"] = "file:https:http:ssh:git"
     return env
@@ -506,8 +525,10 @@ def load_definition(
                 ("fetch", "-q", "--depth", "1", "origin", ref or "main"),
                 ("-c", "core.symlinks=true", "checkout", "-q", "FETCH_HEAD"),
             )
+            fetch = GIT_FETCH.get()
+            extra = fetch.args if fetch is not None else ()
             for step in steps:
-                p = _git(tmp, *step, env=env)
+                p = _git(tmp, *extra, *step, env=env)
                 if p.returncode != 0:
                     msg = (p.stderr.strip().splitlines() or ["git failed"])[-1]
                     msg = msg.replace(source, shown)

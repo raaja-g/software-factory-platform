@@ -184,3 +184,10 @@ def test_provider_sets_mirror_env_only_when_attached(attach, expect):
 
     p = DockerSandboxProvider(lambda: None, attach=attach)  # type: ignore[arg-type]
     assert (p._proxy_env() == mirror_env()) is expect and (p._proxy_env() is None) is not expect
+
+
+def test_gitops_volume_name_and_never_a_sandbox_volume():
+    from swfactory.sandbox.template import gitops_volume
+
+    assert gitops_volume(JOB) == f"gitops-{JOB}"
+    assert not VOLUME_RE.fullmatch(gitops_volume(JOB))

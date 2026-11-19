@@ -233,13 +233,8 @@ async def test_submit_command_itself_refuses_moved_head(api_db, needs_human_job)
             )  # fmt: skip
 
 
-async def test_submit_command_source_ref_and_budget_amount_required(api_db, needs_human_job):
+async def test_submit_command_budget_amount_required(api_db, needs_human_job):
     async with api_db.sessions.begin() as s:
-        with pytest.raises(ValueError):
-            await submit_command(
-                s, job_id=needs_human_job, action=HumanAction.CANCEL, note=None,
-                requested_by="x", source_ref="pr:1",
-            )  # fmt: skip
         with pytest.raises(CommandRefused, match="add_budget needs an amount"):
             await submit_command(
                 s, job_id=needs_human_job, action=HumanAction.ADD_BUDGET, note=None,

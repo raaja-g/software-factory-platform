@@ -7,6 +7,7 @@ from swfactory.events import record_event
 from swfactory.graph import steps
 from swfactory.graph.deps import Deps
 from swfactory.graph.nodes import enter_stage, job_uuid, merged
+from swfactory.graph.nodes.deliver import record_pr
 from swfactory.graph.routing import (
     budget_update,
     failure_update,
@@ -94,9 +95,22 @@ def make(deps: Deps):
         async with deps.sessions.begin() as s:
             await record_event(s, job_id, "decision.made", data)
         await enter_stage(deps, job_id, Stage.APPROVE, decision=decision.value)
+        if decision == Decision.APPROVE:
+            await _draft_pr(job_id, head)
         new = merged(state, update)
         target = route_after_approve(new)
         update.update(transition(new, "approve", target))
         return Command(goto=target, update=update)
+
+    async def _draft_pr(job_id, head: str) -> None:  # noqa: ANN001
+        """A draft PR for the approved head, only for a github app whose CI is safe to run."""
+        job, _, app = await pinned_definition(deps, job_id)
+        if app.repo_kind != "github" or not app.github.ci_safe:
+            return
+        box = await job_sandbox(deps, job_id)
+        async with running(box):
+            res = await deps.git.deliver(job, app, box, draft=True, expected_head=head)
+        if res.status == "pr_open" and res.pr_url:
+            await record_pr(deps, job_id, res.pr_url)
 
     return approve

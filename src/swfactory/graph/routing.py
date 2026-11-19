@@ -46,6 +46,7 @@ REASON_MERGE_CONFLICT = "merge conflict"
 REASON_APPROVER_ESCALATED = "approver escalated"
 REASON_BUDGET = "budget"
 REASON_HUMAN_APPROVAL = "human approval required (triage)"
+REASON_HUMAN_APPROVAL_INTAKE = "human approval required (intake)"
 REASON_DIFF_TOO_LARGE = "diff too large to review fully"
 
 
@@ -184,7 +185,11 @@ def transition(state: JobState, source: str, target: str) -> dict[str, Any]:
             if approved and state.get("diff_cut"):
                 reason = REASON_DIFF_TOO_LARGE
             elif approved and state.get("require_human_approval"):
-                reason = REASON_HUMAN_APPROVAL
+                reason = (
+                    REASON_HUMAN_APPROVAL_INTAKE
+                    if state.get("approval_from_job")
+                    else REASON_HUMAN_APPROVAL
+                )
             else:
                 reason = REASON_APPROVER_ESCALATED
             return {"gate_reason": reason, "retry_node": None}

@@ -77,3 +77,26 @@ async def test_log_context_is_per_task(capsys):
     recs = [json.loads(x) for x in capsys.readouterr().err.splitlines()]
     assert sorted(r["job_id"] for r in recs) == ["a", "b"]
     assert all(r["event"] == f"from-{r['job_id']}" for r in recs)
+
+
+def test_logging_follows_the_current_stderr_even_after_an_old_one_was_closed(monkeypatch):
+    import io
+
+    first, second = io.StringIO(), io.StringIO()
+    monkeypatch.setattr("sys.stderr", first)
+    configure_logging("INFO")
+    first.close()  # a CLI test runner closes its captured stream when a command ends
+    monkeypatch.setattr("sys.stderr", second)
+    logging.getLogger("somelib").warning("HTTP Request: %s %s %d", "POST", "http://x/y", 409)
+    text = second.getvalue()
+    assert "Logging error" not in text and "Arguments:" not in text
+    assert json.loads(text.strip().splitlines()[-1])["event"] == "HTTP Request: POST http://x/y 409"
+
+
+def test_http_client_libraries_do_not_log_requests_at_info(capsys):
+    import logging
+
+    configure_logging("INFO")
+    logging.getLogger("httpx").info("HTTP Request: GET http://x/ 200")
+    logging.getLogger("httpcore").info("connect")
+    assert capsys.readouterr().err == ""

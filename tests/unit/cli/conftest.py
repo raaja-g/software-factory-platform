@@ -10,6 +10,7 @@ from swfactory.cli.main import app
 from swfactory.settings import get_settings
 
 SHOWN_HEAD = "a" * 40
+ID2 = "22222222-2222-2222-2222-222222222222"
 FLASH = {
     "alias": "flash@vertex", "provider": "vertex", "upstream_id": "gemini-flash",
     "strength": "cheap", "price_in_per_mtok": "0.1", "price_out_per_mtok": "0.4",
@@ -67,6 +68,8 @@ class MockApi:
             return httpx.Response(200, json=[JOB])
         if path.endswith("/runs"):
             return httpx.Response(200, json=[])
+        if path.startswith("/api/jobs/") and path.endswith("/follow-up"):
+            return httpx.Response(201, json={"job_id": ID2, "ref": "demo-gh:002"})
         if path.startswith("/api/jobs/") and path.endswith("/actions"):
             return httpx.Response(202, json={"command_id": "c"})
         if path.startswith("/api/jobs/"):

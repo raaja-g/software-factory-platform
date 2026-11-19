@@ -15,7 +15,9 @@ from swfactory.mirror.tokens import (
     TOKEN_REFRESH_S,
     TokenUnavailable,
     adc_access_token,
+    broker_packages_fetch,
     read_env_file,
+    registry_org,
     registry_token,
 )
 from swfactory.settings import Settings
@@ -93,10 +95,25 @@ def _adc_for(settings: Settings) -> Callable[[], str] | None:
     return (lambda: adc_access_token(path)) if path is not None else None
 
 
+def _github_for(settings: Settings, defn: Definition) -> Callable[[], Awaitable[str]] | None:
+    """The broker callable for the first github_packages registry (None without a broker token)."""
+    if not settings.broker_token_file:
+        return None
+    for reg in defn.factory.registries.values():
+        if reg.upstream == "github_packages" and registry_org(reg):
+            return broker_packages_fetch(
+                settings.broker_url, settings.broker_token_file, registry_org(reg)
+            )
+    return None
+
+
 async def registry_status(settings: Settings, defn: Definition, out_dir: Path) -> dict[str, str]:
     """One pass; returns '' for ok or the failure reason, by registry name."""
     tokens, failures = await mint_tokens(
-        defn, env_file=settings.registry_env_file, adc=_adc_for(settings), github=None
+        defn,
+        env_file=settings.registry_env_file,
+        adc=_adc_for(settings),
+        github=_github_for(settings, defn),
     )
     write_mirror(defn, tokens, out_dir)
     return {n: failures.get(n, "") for n in defn.factory.registries}
@@ -124,7 +141,7 @@ async def run_mirror(
                     result.definition,
                     env_file=settings.registry_env_file,
                     adc=_adc_for(settings),
-                    github=None,
+                    github=_github_for(settings, result.definition),
                 )
                 last_sha, last_mint = result.sha, now
             if write_mirror(result.definition, tokens, out_dir):

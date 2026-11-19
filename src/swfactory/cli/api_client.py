@@ -118,12 +118,19 @@ class ApiClient:
             body = {"action": action, "note": note, "amount_usd": amount_usd}
         return self._call("POST", f"/api/jobs/{_ref(ref)}/actions", json=body)
 
+    def follow_up(self, ref: str, note: str) -> dict[str, Any]:
+        return self._call("POST", f"/api/jobs/{_ref(ref)}/follow-up", json={"note": note})
+
     # apps, login
     def list_apps(self) -> list[dict[str, Any]]:
         return self._call("GET", "/api/apps")
 
     def login_code(self) -> str:
         return self._call("POST", "/api/login-code")["code"]
+
+    # definition
+    def sync_definition(self) -> None:
+        self._call("POST", "/api/definition/sync", json={})
 
     # models
     def refresh_models(

@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
+from croniter import croniter
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -305,6 +306,13 @@ class AppAccess(StrictModel):
         return v
 
 
+class GitHubAppSettings(StrictModel):
+    merge_method: Literal["merge", "squash", "rebase"] = "squash"
+    intake_label: str = "factory"
+    approvers: tuple[str, ...] = ()
+    ci_safe: bool = False
+
+
 class AppDef(StrictModel):
     repo_kind: Literal["github", "local"]
     repo_url: str
@@ -340,9 +348,13 @@ class AppDef(StrictModel):
     concurrency: int | None = None
     smoke: SmokeConfig | None = None
     access: AppAccess | None = None
+    github: GitHubAppSettings = GitHubAppSettings()
+    hold_slot_while_pr_open: bool = False
 
     @model_validator(mode="after")
     def _check(self) -> "AppDef":
+        if self.repo_kind == "local" and self.github != GitHubAppSettings():
+            raise ValueError("a github block needs repo_kind github")
         if self.smoke is not None and self.runner != "web":
             raise ValueError("smoke requires runner web")
         if self.local_path is not None:
@@ -492,13 +504,49 @@ class AutomationDef(StrictModel):
     app: str
     feature_template: str
     profile: str | None = None
+    max_open_jobs: int = Field(1, ge=1)
+    min_interval_s: int = Field(0, ge=0)
+
+    @model_validator(mode="after")
+    def _check_trigger(self) -> "AutomationDef":
+        t = self.trigger
+        if t.provider == "schedule":
+            if t.event != "cron_fired":
+                raise ValueError("a schedule trigger needs event cron_fired")
+            cron = t.filter.get("cron")
+            if not isinstance(cron, str) or not croniter.is_valid(cron):
+                raise ValueError(
+                    "a schedule trigger needs a valid filter.cron (5 fields or @daily)"
+                )
+        elif t.provider == "webhook":
+            if t.event != "received":
+                raise ValueError("a webhook trigger needs event received")
+            ids = t.filter.get("webhook_ids")
+            if (
+                not isinstance(ids, list)
+                or not ids
+                or not all(isinstance(i, str) and i for i in ids)
+            ):
+                raise ValueError(
+                    "a webhook trigger needs filter.webhook_ids: a list of webhook names"
+                )
+        return self
 
 
 class WebhookDef(StrictModel):
-    auth_mode: str
-    signature_scheme: Literal["github", "sentry", "standard_webhooks", "stripe"]
+    enabled: bool = True
+    auth_mode: Literal["signature", "token"]
+    signature_scheme: Literal["github", "sentry", "standard_webhooks", "stripe"] | None = None
     secret_env: str = Field(pattern=r"^WEBHOOK_[A-Z0-9_]+_SECRET$")
-    delivery_id_header: str
+    delivery_id_header: str | None = None
+
+    @model_validator(mode="after")
+    def _check_scheme(self) -> "WebhookDef":
+        if self.auth_mode == "signature" and self.signature_scheme is None:
+            raise ValueError("auth_mode signature needs a signature_scheme")
+        if self.auth_mode != "signature" and self.signature_scheme is not None:
+            raise ValueError("signature_scheme is only allowed with auth_mode signature")
+        return self
 
 
 class ScorerLabel(StrictModel):
@@ -551,6 +599,18 @@ class Definition(StrictModel):
     webhooks: dict[str, WebhookDef] = {}
     scorers: dict[str, ScorerDef] = {}
     benchmarks: dict[str, BenchSuiteDef] = {}
+
+    @model_validator(mode="after")
+    def _check_webhook_ids(self) -> "Definition":
+        for name, auto in self.automations.items():
+            if auto.trigger.provider != "webhook":
+                continue
+            for wid in auto.trigger.filter.get("webhook_ids", []):
+                if wid not in self.webhooks:
+                    raise ValueError(
+                        f"automation '{name}': filter.webhook_ids names unknown webhook '{wid}'"
+                    )
+        return self
 
     def app(self, slug: str) -> AppDef:
         return self.factory.apps[slug]

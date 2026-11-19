@@ -27,9 +27,11 @@ def make(deps: Deps):
         if result.budget_usd is not None and job.budget_usd == fallback:
             fields["budget_usd"] = result.budget_usd
         await enter_stage(deps, job_id, Stage.TRIAGE, **fields)
+        from_job = bool(job.require_human_approval)
         return {
             "reviewers": list(result.reviewers),
-            "require_human_approval": result.require_human_approval,
+            "require_human_approval": result.require_human_approval or from_job,
+            "approval_from_job": from_job and not result.require_human_approval,
         }
 
     return triage

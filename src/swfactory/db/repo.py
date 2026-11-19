@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, insert, or_, select, text, update
+from sqlalchemy import and_, case, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +23,7 @@ from swfactory.db.tables import (
     Job,
     JobEvent,
     ModelDecision,
+    WebhookDelivery,
 )
 from swfactory.domain.types import (
     DEFAULT_REVIEWERS,
@@ -376,9 +377,13 @@ async def insert_command(
     head_sha: str | None = None,
     gate_event_id: int | None = None,
     amount_usd: Decimal | None = None,
+    source_ref: str | None = None,
 ) -> UUID:
+    """Insert a command; a repeated ``source_ref`` returns the first command's id (no new row)."""
+    if head_sha is None and action == HumanAction.APPROVE.value:
+        head_sha = await s.scalar(select(Job.head_sha).where(Job.id == job_id))
     cid = await s.scalar(
-        insert(Command)
+        pg_insert(Command)
         .values(
             job_id=job_id,
             action=action,
@@ -387,11 +392,21 @@ async def insert_command(
             head_sha=head_sha,
             gate_event_id=gate_event_id,
             amount_usd=amount_usd,
+            source_ref=source_ref,
+        )
+        .on_conflict_do_nothing(
+            index_elements=[Command.source_ref], index_where=text("source_ref IS NOT NULL")
         )
         .returning(Command.id)
     )
+    if cid is None and source_ref is not None:
+        cid = await command_by_source_ref(s, source_ref)
     assert cid is not None
     return cid
+
+
+async def command_by_source_ref(s: AsyncSession, source_ref: str) -> UUID | None:
+    return await s.scalar(select(Command.id).where(Command.source_ref == source_ref))
 
 
 async def apply_budget_top_up(
@@ -1014,3 +1029,140 @@ async def stale_reservations(
         .limit(limit)
     )
     return list((await s.scalars(q)).all())
+
+
+# -- GitHub delivery state (M8.4b) ---------------------------------------------
+
+
+async def delivery_state(s: AsyncSession, job_id: UUID) -> tuple[str | None, str | None]:
+    """(pushed_sha, merge_request_id) of a job, read fresh from the row."""
+    row = (
+        await s.execute(
+            select(Job.pushed_sha, Job.merge_request_id)
+            .where(Job.id == job_id)
+            .execution_options(populate_existing=True)
+        )
+    ).first()
+    if row is None:
+        raise RuntimeError(f"job {job_id} not found")
+    return row[0], row[1]
+
+
+async def record_pushed(s: AsyncSession, job_id: UUID, sha: str) -> None:
+    """Persist the sha last pushed to GitHub (the next push's lease); one ``job.stage`` event."""
+    current = (await delivery_state(s, job_id))[0]
+    if current == sha:
+        return
+    await s.execute(update(Job).where(Job.id == job_id).values(pushed_sha=sha))
+    await record_event(
+        s, job_id, "job.stage", {"stage": Stage.DELIVERING.value, "step": "pushed", "sha": sha}
+    )
+
+
+async def record_merge_request(s: AsyncSession, job_id: UUID, uuid: str | None) -> None:
+    """Persist (or, with None, clear) the merge-async request id; one ``job.stage`` event."""
+    current = (await delivery_state(s, job_id))[1]
+    if current == uuid:
+        return
+    await s.execute(update(Job).where(Job.id == job_id).values(merge_request_id=uuid))
+    step = "merge_requested" if uuid is not None else "merge_request_cleared"
+    await record_event(
+        s,
+        job_id,
+        "job.stage",
+        {"stage": Stage.DELIVERING.value, "step": step, "merge_request_id": uuid},
+    )
+
+
+async def latest_decision_event(
+    s: AsyncSession, job_id: UUID
+) -> tuple[Mapping[str, Any], datetime] | None:
+    """The data and time of the job's latest ``decision.made`` event."""
+    row = (
+        await s.execute(
+            select(JobEvent.data, JobEvent.at)
+            .where(JobEvent.job_id == job_id, JobEvent.kind == "decision.made")
+            .order_by(JobEvent.id.desc())
+            .limit(1)
+        )
+    ).first()
+    return None if row is None else (dict(row[0] or {}), row[1])
+
+
+async def approver_after(s: AsyncSession, job_id: UUID, since: datetime | None) -> str | None:
+    """``requested_by`` of the latest consumed ``approve`` command consumed after ``since``."""
+    q = select(Command.requested_by).where(
+        Command.job_id == job_id,
+        Command.action == HumanAction.APPROVE.value,
+        Command.consumed_at.is_not(None),
+    )
+    if since is not None:
+        q = q.where(Command.consumed_at > since)
+    return await s.scalar(q.order_by(Command.consumed_at.desc()).limit(1))
+
+
+async def review_rows(
+    s: AsyncSession, job_id: UUID
+) -> tuple[dict[int, dict[str, str]], list[tuple[str, str, str, Decimal]]]:
+    """Reviewer verdicts by round and kind, and (role, engine, model, cost) of every run."""
+    rows = (
+        await s.execute(
+            select(
+                AgentRun.role,
+                AgentRun.round,
+                AgentRun.engine,
+                AgentRun.model_alias,
+                AgentRun.verdict,
+                AgentRun.cost_usd,
+            )
+            .where(AgentRun.job_id == job_id)
+            .order_by(AgentRun.started_at, AgentRun.attempt)
+        )
+    ).all()
+    verdicts: dict[int, dict[str, str]] = {}
+    runs: list[tuple[str, str, str, Decimal]] = []
+    for role, rnd, engine, model, verdict, cost in rows:
+        if role.startswith("reviewer-") and verdict is not None:
+            verdicts.setdefault(int(rnd), {})[role.removeprefix("reviewer-")] = verdict
+        runs.append((role, engine, model or "", Decimal(cost or 0)))
+    return verdicts, runs
+
+
+async def record_delivery(s: AsyncSession, *, source: str, delivery_id: str) -> bool:
+    """Remember a webhook delivery in the caller's transaction; True if it is new."""
+    got = await s.scalar(
+        pg_insert(WebhookDelivery)
+        .values(source=source, delivery_id=delivery_id)
+        .on_conflict_do_nothing()
+        .returning(WebhookDelivery.delivery_id)
+    )
+    return got is not None
+
+
+async def get_job_by_pr_url(s: AsyncSession, pr_url: str) -> Job | None:
+    """The newest job with this PR url (a follow-up, not the job it superseded)."""
+    return (
+        await s.execute(
+            select(Job).where(Job.pr_url == pr_url).order_by(Job.created_at.desc()).limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def last_waiting_at(s: AsyncSession, job_id: UUID) -> datetime | None:
+    """Time of the job's latest ``human.waiting`` event."""
+    return await s.scalar(
+        select(JobEvent.at)
+        .where(JobEvent.job_id == job_id, JobEvent.kind == "human.waiting")
+        .order_by(JobEvent.id.desc())
+        .limit(1)
+    )
+
+
+async def last_stage_at(s: AsyncSession, job_id: UUID) -> datetime | None:
+    """Time of the job's latest ``job.stage`` event."""
+    return await s.scalar(
+        select(JobEvent.at)
+        .where(JobEvent.job_id == job_id, JobEvent.kind == "job.stage")
+        .order_by(JobEvent.id.desc())
+        .limit(1)
+    )

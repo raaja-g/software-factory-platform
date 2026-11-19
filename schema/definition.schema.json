@@ -86,6 +86,20 @@
           "title": "Default Branch",
           "type": "string"
         },
+        "github": {
+          "$ref": "#/$defs/GitHubAppSettings",
+          "default": {
+            "approvers": [],
+            "ci_safe": false,
+            "intake_label": "factory",
+            "merge_method": "squash"
+          }
+        },
+        "hold_slot_while_pr_open": {
+          "default": false,
+          "title": "Hold Slot While Pr Open",
+          "type": "boolean"
+        },
         "local_path": {
           "anyOf": [
             {
@@ -268,6 +282,18 @@
         "feature_template": {
           "title": "Feature Template",
           "type": "string"
+        },
+        "max_open_jobs": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Max Open Jobs",
+          "type": "integer"
+        },
+        "min_interval_s": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Min Interval S",
+          "type": "integer"
         },
         "profile": {
           "anyOf": [
@@ -687,6 +713,41 @@
         }
       },
       "title": "Defaults",
+      "type": "object"
+    },
+    "GitHubAppSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "approvers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Approvers",
+          "type": "array"
+        },
+        "ci_safe": {
+          "default": false,
+          "title": "Ci Safe",
+          "type": "boolean"
+        },
+        "intake_label": {
+          "default": "factory",
+          "title": "Intake Label",
+          "type": "string"
+        },
+        "merge_method": {
+          "default": "squash",
+          "enum": [
+            "merge",
+            "squash",
+            "rebase"
+          ],
+          "title": "Merge Method",
+          "type": "string"
+        }
+      },
+      "title": "GitHubAppSettings",
       "type": "object"
     },
     "ImproverConfig": {
@@ -1480,12 +1541,29 @@
       "additionalProperties": false,
       "properties": {
         "auth_mode": {
+          "enum": [
+            "signature",
+            "token"
+          ],
           "title": "Auth Mode",
           "type": "string"
         },
         "delivery_id_header": {
-          "title": "Delivery Id Header",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delivery Id Header"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
         },
         "secret_env": {
           "pattern": "^WEBHOOK_[A-Z0-9_]+_SECRET$",
@@ -1493,21 +1571,27 @@
           "type": "string"
         },
         "signature_scheme": {
-          "enum": [
-            "github",
-            "sentry",
-            "standard_webhooks",
-            "stripe"
+          "anyOf": [
+            {
+              "enum": [
+                "github",
+                "sentry",
+                "standard_webhooks",
+                "stripe"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "Signature Scheme",
-          "type": "string"
+          "default": null,
+          "title": "Signature Scheme"
         }
       },
       "required": [
         "auth_mode",
-        "signature_scheme",
-        "secret_env",
-        "delivery_id_header"
+        "secret_env"
       ],
       "title": "WebhookDef",
       "type": "object"

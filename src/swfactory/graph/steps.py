@@ -13,7 +13,8 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from swfactory.costs.budgets import BudgetExceeded
 from swfactory.costs.pricing import estimate_cost
@@ -376,6 +377,19 @@ async def _head(box: Sandbox) -> str:
     return res.stdout.strip()
 
 
+async def store_head(s: AsyncSession, job_id: UUID, sha: str) -> None:
+    await s.execute(update(Job).where(Job.id == job_id).values(head_sha=sha))
+
+
+async def refresh_head(deps: Deps, job_id: UUID, box: Sandbox) -> str:
+    """Store the box's HEAD as ``jobs.head_sha`` (what reviewers, approver and dashboard show)."""
+    sha = await _head(box)
+    if sha:
+        async with deps.sessions.begin() as s:
+            await store_head(s, job_id, sha)
+    return sha
+
+
 async def _find_finished(
     deps: Deps, job_id: UUID, role: Role, round: int, occurrence: int, head: str | None
 ) -> AgentRunRow | None:
@@ -589,7 +603,7 @@ async def run_agent_step(
         # an isolated box is already running and owned by the caller
         box = sandbox if sandbox is not None else await job_sandbox(deps, job_id)
         async with running(box) if not isolated else _nullcontext(box):
-            return await _run_in_box(
+            outcome = await _run_in_box(
                 deps,
                 box,
                 engine=engine,
@@ -611,6 +625,9 @@ async def run_agent_step(
                 slug=slug,
                 resume=resume,
             )
+            if role == Role.BUILDER and not isolated:
+                await refresh_head(deps, job_id, box)
+            return outcome
 
 
 async def _run_in_box(

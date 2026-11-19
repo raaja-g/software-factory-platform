@@ -227,3 +227,11 @@ def test_deliverable_heads_follow_recorded_rebases():
     # a crash or Retry after deliver's rebase must still accept the rebased head
     assert deliverable_heads("a", [("a", "b"), ("x", "y"), ("b", "c")]) == {"a", "b", "c"}
     assert deliverable_heads("a", []) == {"a"}
+
+
+def test_job_flag_gives_the_intake_gate_reason():
+    st = JobState(decision="APPROVE", require_human_approval=True, approval_from_job=True)
+    assert transition(st, "approve", "human_gate") == {
+        "gate_reason": "human approval required (intake)",
+        "retry_node": None,
+    }

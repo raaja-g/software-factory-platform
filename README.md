@@ -2,9 +2,9 @@
 
 A platform that turns a requirement into reviewed, merged code. For each feature it runs spec, build, verify, four independent reviews, approve and deliver, using coding agents on any model provider. It runs on your machine in Docker, many apps and features at a time.
 
-**Status: under construction.** Milestones M1 to M7 are built: foundation, the job loop, roles and contracts, sandboxes with the verify gate and local git, the model gateway with cost control, the coding-agent adapters, and now the API, dashboard, CLI and a one-command local release. Still to come: GitHub (M8), scoring and benchmarks (M10), Laya routing (M11) and the improver (M12). See [progress.md](progress.md).
+**Status: under construction.** Milestones M1 to M8 are built: foundation, the job loop, roles and contracts, sandboxes with the verify gate and local git, the model gateway with cost control, the coding-agent adapters, the API, dashboard and CLI with a one-command local release, and now GitHub. Still to come: scoring and benchmarks (M10), Laya routing (M11) and the improver (M12). See [progress.md](progress.md).
 
-## What works now (M1 to M7)
+## What works now (M1 to M8)
 
 - A Python package, `swfactory`, with a `factory` command line.
 - Settings from the environment, and logs that redact secrets.
@@ -50,6 +50,16 @@ uv run factory models refresh
   - The gateway's config is rendered from your definition at start and whenever the definition changes; `FACTORY_DEFINITION_PATH` and `FACTORY_HOST_REPOS_ROOT` in `.env` are required.
 
 Not verified live: the acceptance replay of v1's four features with real models (`tests/e2e/test_v1_parity.py`, opt-in) has not been run, and the registry connections to real Artifact Registry and GitHub Packages are tested only against mock upstreams. The engines and the gateway still have not run against real models.
+
+- **GitHub (M8).** Repos can be GitHub repos as well as folders, through a GitHub App (or, on your own machine only, a fine-grained token in `FACTORY_GITHUB_TOKEN`).
+  - **No push credential in a sandbox.** Git over the network runs in a separate, hardened container that works on a copy of the repo the platform owns, fed by bundles; it holds a short-lived token limited to one repo and one permission, talks only to the pinned GitHub host, and ignores any git config or hooks in the repo. The API process never holds the App's private key; it asks a token broker in the orchestrator.
+  - **Delivery you can trust.** Only the commit that was tested and approved is pushed or merged: if the head moves, or a rebase changes it, the job re-verifies, or goes back to you. Every step is checked before it acts, so a crash never opens a second PR or merges twice. Each PR carries a `factory/review` check with the verdicts, models and cost.
+  - **CI safety.** A repo is registered with `github.ci_safe: false` by default, which means nothing is pushed until a person approves in the factory, because a push could run the repo's CI with its secrets. Set it to true only when your CI is safe for `factory/**` branches.
+  - **Issues in, outcomes out.** Label an issue `factory` and it becomes a job once per labelling (a finished job is never re-run when its issue is still open). An issue from someone without write access needs a person's approval. When the job ends, the label is removed and one comment says what happened. A PR closed without merging closes its job.
+  - **PR comment commands.** `/factory approve`, `rework <note>` and `reject` on the PR, checked against GitHub's own permissions; a lost webhook is recovered by polling. `rework` on a delivered PR starts a follow-up job on the same branch.
+  - **Also:** `factory apps create` makes a new repo with auto-merge on; cron schedules and signed webhooks start jobs with per-automation caps; the definition repo is synced from GitHub and PRs to it get a validation check; the package mirror can read GitHub Packages through the App.
+
+Not verified live: none of M8 has run against real GitHub. It is tested against a fake GitHub and local git repos; the GitHub App setup in your org (spike S11 in the plan) and a real PR round trip are still to do.
 
 Run a real job from the command line (needs the gateway running and the Claude and Gemini models you use enabled):
 
@@ -114,4 +124,4 @@ uv run pytest -m docker                         # builds and uses real container
 
 ## Next
 
-M8: GitHub: a GitHub App for issue intake, pull requests, checks and comment commands (`/factory approve`), webhooks and schedules. Then scoring and benchmarks (M10), Laya model routing with your synthetic data (M11) and the improver (M12). The GCP team instance (M9) and the hardening that only matters for it come later, when you ask.
+M10: scoring every job (objective checks and calibrated LLM judges) and replaying your past jobs as benchmarks that compare models on cost and quality. Then Laya model routing with your synthetic data (M11) and the improver (M12). After that, the live pass: real models, the GitHub App and your registries.

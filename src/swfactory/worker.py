@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -127,11 +128,27 @@ def build_worker_deps(
         from swfactory.engines.registry import register_engines
         from swfactory.gitops.folder import FolderRepo
         from swfactory.gitops.local import LocalGit
-        from swfactory.gitops.service import GitDispatcher
+        from swfactory.gitops.service import GitDispatcher, GitService
         from swfactory.models.selection import ModelSelector
         from swfactory.sandbox.docker import DockerSandboxProvider
 
         register_engines(settings)
+        git_services: dict[str, GitService] = {
+            "local": LocalGit(
+                Path(settings.repos_dir),
+                max_bundle_mb=settings.max_bundle_mb,
+                folders=FolderRepo.from_settings(settings),
+            )
+        }
+        if settings.github_app_client_id or settings.github_token:
+            from swfactory.gitops.github import build_github_git
+
+            git_services["github"] = build_github_git(
+                settings,
+                sessions,
+                artifacts,
+                lambda: docker.DockerClient(base_url=settings.docker_host),
+            )
         real_gateway = GatewayClient(
             settings.gateway_url, settings.gateway_master_key.get_secret_value()
         )
@@ -149,15 +166,7 @@ def build_worker_deps(
             catalog=real_catalog,
             gateway=real_gateway,
             budgets=BudgetService(sessions, definitions),
-            git=GitDispatcher(
-                {
-                    "local": LocalGit(
-                        Path(settings.repos_dir),
-                        max_bundle_mb=settings.max_bundle_mb,
-                        folders=FolderRepo.from_settings(settings),
-                    )
-                }
-            ),
+            git=GitDispatcher(git_services),
             roles=RoleLibrary(),
             triage=TriageService(definitions, artifacts),
             definitions=definitions,
@@ -407,6 +416,7 @@ async def _gate_answer(
                 by=cmd.requested_by,
                 retry_offered=dict(snap.interrupts[0].value).get("retry_node") is not None,
                 command_id=cmd.id,
+                head_sha=cmd.head_sha,
             )
         except CommandRefused as exc:
             await consume_command(s, cmd.id, f"refused: {exc}")
@@ -469,6 +479,14 @@ async def _cancel_job(
         cancel = command or await pending_cancel(s, job.id)
         if cancel is not None:
             await consume_command(s, cancel.id, "cancelled")
+    if job.stage == Stage.DELIVERED.value:  # its PR is still open: say why it is closing
+        found_cmd = command or cancel
+        by = found_cmd.requested_by if found_cmd is not None else "a person"
+        try:
+            _, _, app_def = await pinned_definition(deps, job.id)
+            await deps.git.withdraw(job, app_def, note=f"Cancelled in the factory by {by}.")
+        except Exception as exc:
+            log.warning("worker.withdraw_failed", job_id=str(job.id), error=repr(exc))
 
 
 def _compatible(saved: str) -> bool:
@@ -896,6 +914,18 @@ async def _expiry_loop(deps: Deps, interval_s: float = EXPIRY_TICK_S) -> None:
         await asyncio.sleep(interval_s)
 
 
+async def _scheduler_loop(deps: Deps, interval_s: float | None = None) -> None:
+    from swfactory.automations.scheduler import SCHEDULER_TICK_S, Scheduler
+
+    scheduler = Scheduler(deps.sessions, deps.definitions)
+    while True:
+        try:
+            await scheduler.tick(datetime.now(UTC))
+        except Exception as exc:
+            log.warning("automation.tick_failed", error=repr(exc))
+        await asyncio.sleep(interval_s or SCHEDULER_TICK_S)
+
+
 RUN_REQUEST_TICK_S = 2.0
 
 
@@ -942,6 +972,83 @@ async def _shutdown(
             log.warning("worker.release_failed", job_id=str(jid), error=repr(exc))
 
 
+BROKER_PORT = 8091
+_GH_REPO = re.compile(r"^https://github\.com/([^/\s]+)/([^/\s]+?)(?:\.git)?/?$")
+
+
+async def _github_app_repos(deps: Deps) -> set[str]:
+    try:
+        _, defn = await deps.definitions.active()
+    except Exception:
+        return set()
+    out: set[str] = set()
+    for app in defn.factory.apps.values():
+        if app.repo_kind == "github":
+            m = _GH_REPO.match(app.repo_url)
+            if m:
+                out.add(f"{m.group(1)}/{m.group(2)}")
+    return out
+
+
+def make_definition_sync(deps: Deps, settings: Settings) -> Any | None:
+    """The definition sync for this worker, or None without FACTORY_DEFINITION."""
+    if not settings.definition_source:
+        return None
+    from swfactory.definition.sync import DefinitionSync, definition_repo_slug
+    from swfactory.github.auth import make_auth
+
+    auth = None
+    if definition_repo_slug(settings.definition_source):
+        try:
+            auth = make_auth(settings)
+        except ValueError as exc:  # no credentials: a public repo still fetches without a token
+            log.warning("definition_sync.no_github_auth", error=str(exc))
+    return DefinitionSync(settings, deps.definitions, auth=auth)  # pyright: ignore[reportArgumentType]
+
+
+async def _serve_broker(deps: Deps, settings: Settings) -> None:
+    """Serve the token broker on core-net (never published); needs a GitHub App and a token."""
+    if not (settings.github_app_client_id and settings.broker_token_file):
+        return
+    import uvicorn
+
+    from swfactory.definition.sync import definition_repo_slug
+    from swfactory.github.auth import AppAuth, make_auth
+    from swfactory.github.broker import TokenBroker, broker_app
+
+    auth = make_auth(settings)
+    if not isinstance(auth, AppAuth):
+        return
+    shared = Path(settings.broker_token_file).read_text().strip()
+    broker = TokenBroker(
+        auth,
+        definition_repo=definition_repo_slug(settings.definition_source),
+        app_repos=lambda: _github_app_repos(deps),
+    )
+    config = uvicorn.Config(
+        broker_app(broker, shared_token=shared),
+        host="0.0.0.0",  # noqa: S104 - core-net only, never published
+        port=BROKER_PORT,
+        log_level="warning",
+    )
+    await uvicorn.Server(config).serve()
+
+
+async def _github_poll_loop(deps: Deps, settings: Settings) -> None:
+    """Orchestrator: poll labelled issues and delivered PRs; it holds the App key."""
+    if not (settings.github_app_client_id or settings.github_token):
+        return
+    from swfactory.github.intake import GitHubPoller, make_client_factory
+
+    poller = GitHubPoller(deps.sessions, deps.definitions, make_client_factory(settings), settings)
+    while True:
+        try:
+            await poller.tick()
+        except Exception as exc:
+            log.warning("github.poll_tick_failed", error=repr(exc))
+        await asyncio.sleep(settings.github_poll_s)
+
+
 async def _loop(
     deps: Deps,
     cp: BaseCheckpointSaver,
@@ -972,6 +1079,17 @@ async def _loop(
     expirer = asyncio.create_task(_expiry_loop(deps))
     heart = asyncio.create_task(_heartbeat_loop(deps, worker_id, driving, renew_s))
     runner = asyncio.create_task(run_request_loop(deps, worker_id))
+    scheduler = asyncio.create_task(_scheduler_loop(deps))
+    github_poller = asyncio.create_task(_github_poll_loop(deps, settings))
+    definition_sync = make_definition_sync(deps, settings)
+    sync_tasks = (
+        [
+            asyncio.create_task(definition_sync.run_poll_loop()),
+            asyncio.create_task(definition_sync.listen()),
+        ]
+        if definition_sync is not None
+        else []
+    )
     disk_state = {"high": False}
     try:
         while True:
@@ -1037,6 +1155,10 @@ async def _loop(
         expirer.cancel()
         heart.cancel()
         runner.cancel()
+        scheduler.cancel()
+        github_poller.cancel()
+        for t in sync_tasks:
+            t.cancel()
         if ticker is not None:
             ticker.cancel()
         if catalog_ticker is not None:
@@ -1049,6 +1171,9 @@ async def _loop(
             workspaces,
             expirer,
             runner,
+            scheduler,
+            github_poller,
+            *sync_tasks,
             *([ticker] if ticker else []),
             *([catalog_ticker] if catalog_ticker else []),
             *driving.values(),

@@ -79,6 +79,10 @@ class Settings(BaseSettings):
     repos_dir: str = Field(default="/repos", validation_alias="FACTORY_REPOS_DIR")
     max_bundle_mb: int = Field(default=2048, validation_alias="FACTORY_MAX_BUNDLE_MB")
     gitops_timeout_s: int = Field(default=900, validation_alias="FACTORY_GITOPS_TIMEOUT_S")
+    gitops_network: str = Field(default="gitops-net", validation_alias="FACTORY_GITOPS_NETWORK")
+    gitops_image: str = Field(
+        default="swfactory/runner:0.1.0", validation_alias="FACTORY_GITOPS_IMAGE"
+    )
     disk_high_water_pct: int = Field(
         default=85, ge=50, le=99, validation_alias="FACTORY_DISK_HIGH_WATER_PCT"
     )
@@ -128,6 +132,24 @@ class Settings(BaseSettings):
     )
     db_statement_timeout_s: int = Field(
         default=0, ge=0, validation_alias="FACTORY_DB_STATEMENT_TIMEOUT_S"
+    )
+
+    github_app_client_id: str | None = Field(
+        default=None, validation_alias="FACTORY_GITHUB_APP_CLIENT_ID"
+    )
+    github_app_private_key_file: Path | None = Field(
+        default=None, validation_alias="FACTORY_GITHUB_APP_PRIVATE_KEY_FILE"
+    )
+    github_webhook_secret: SecretStr | None = Field(
+        default=None, validation_alias="FACTORY_GITHUB_WEBHOOK_SECRET"
+    )
+    github_token: SecretStr | None = Field(default=None, validation_alias="FACTORY_GITHUB_TOKEN")
+    github_poll_s: int = Field(default=60, ge=1, validation_alias="FACTORY_GITHUB_POLL_S")
+    broker_url: str = Field(
+        default="http://orchestrator:8091", validation_alias="FACTORY_BROKER_URL"
+    )
+    broker_token_file: str | None = Field(
+        default=None, validation_alias="FACTORY_BROKER_TOKEN_FILE"
     )
 
     notify_webhook_url: SecretStr | None = Field(

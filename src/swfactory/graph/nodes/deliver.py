@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from langgraph.types import Command
 from sqlalchemy import select
 
-from swfactory.db.tables import JobEvent
+from swfactory.db.tables import Job, JobEvent
 from swfactory.domain.types import Stage, VerifyStatus
 from swfactory.events import record_event
 from swfactory.graph.deps import Deps
@@ -21,13 +22,32 @@ from swfactory.graph.routing import (
     verify_gate_reason,
 )
 from swfactory.graph.state import JobState
-from swfactory.graph.steps import _head, _runner, job_sandbox, pinned_definition, step_timeout_s
+from swfactory.graph.steps import (
+    _head,
+    _runner,
+    job_sandbox,
+    pinned_definition,
+    step_timeout_s,
+    store_head,
+)
 from swfactory.sandbox.base import running
 from swfactory.verify.gate import GateResult, VerifyGate
 from swfactory.verify.smoke import SmokeRunner
 
 REASON_CONFLICT = REASON_MERGE_CONFLICT
 _RETRY = "deliver"
+
+
+async def record_pr(deps: Deps, job_id: UUID, pr_url: str) -> bool:
+    """Store jobs.pr_url; emit delivery.pr_opened and return True only when it was null."""
+    async with deps.sessions.begin() as s:
+        job = await s.get(Job, job_id, with_for_update=True, populate_existing=True)
+        if job is None or job.pr_url:
+            return False
+        job.pr_url = pr_url
+        await s.flush()
+        await record_event(s, job_id, "delivery.pr_opened", {"pr_url": pr_url})
+        return True
 
 
 def _gate(reason: str) -> dict[str, Any]:
@@ -73,7 +93,8 @@ def make(deps: Deps):
             return _gate(REASON_MERGE_CONFLICT)
         moved = await _head(box)
         if moved != head:
-            async with deps.sessions.begin() as s:
+            async with deps.sessions.begin() as s:  # head and event commit together
+                await store_head(s, job_id, moved)
                 await record_event(
                     s, job_id, "delivery.rebased", {"from_sha": head, "to_sha": moved}
                 )
@@ -100,6 +121,8 @@ def make(deps: Deps):
                 }
             approved = moved
             update["approved_head"] = approved
+        async with deps.sessions() as s:  # the row loaded at node start is stale after a rebase
+            job = await s.get_one(Job, job_id, populate_existing=True)
         res = await deps.git.deliver(job, app, box, draft=False, expected_head=approved)
         if res.status == "merged":
             update["outcome"] = Stage.MERGED.value
@@ -109,11 +132,14 @@ def make(deps: Deps):
                         s,
                         job_id,
                         "delivery.merged",
-                        {"merge_sha": res.merge_sha, "head_sha": approved, "pr_url": None},
+                        {"merge_sha": res.merge_sha, "head_sha": approved, "pr_url": res.pr_url},
                     )
+            if res.pr_url:
+                await record_pr(deps, job_id, res.pr_url)
         elif res.status == "pr_open":
             update["outcome"] = Stage.DELIVERED.value
-            await enter_stage(deps, job_id, Stage.DELIVERED, pr_url=res.pr_url)
+            if res.pr_url:
+                await record_pr(deps, job_id, res.pr_url)
         elif res.status == "conflict":
             update.update(_gate(REASON_MERGE_CONFLICT))
         elif res.detail in (REASON_FOLDER_DIRTY, REASON_FOLDER_MOVED):

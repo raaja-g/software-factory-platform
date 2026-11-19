@@ -3,6 +3,8 @@
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from pathlib import Path
 
+import httpx
+
 from swfactory.definition.models import RegistryDef
 from swfactory.logging import register_secret
 
@@ -38,6 +40,33 @@ async def registry_token(
         raise TokenUnavailable("empty token")
     register_secret(token)
     return token
+
+
+def registry_org(reg: RegistryDef) -> str:
+    """GitHub Packages requires the token owner to equal the scope: the first scope without '@'."""
+    return reg.scopes[0].lstrip("@") if reg.scopes else ""
+
+
+def broker_packages_fetch(
+    broker_url: str, token_file: str, org: str
+) -> Callable[[], Awaitable[str]]:
+    async def fetch() -> str:
+        try:
+            shared = Path(token_file).read_text().strip()
+            async with httpx.AsyncClient(timeout=30) as http:
+                r = await http.post(
+                    f"{broker_url.rstrip('/')}/internal/github-packages-token",
+                    json={"org": org},
+                    headers={"authorization": f"Bearer {shared}"},
+                )
+            r.raise_for_status()
+            return str(r.json()["token"])
+        except (OSError, httpx.HTTPError, KeyError, ValueError) as e:
+            raise TokenUnavailable(
+                f"GitHub Packages token unavailable ({type(e).__name__})"
+            ) from None
+
+    return fetch
 
 
 def read_env_file(path: Path, names: Iterable[str]) -> dict[str, str]:

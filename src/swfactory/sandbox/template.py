@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -39,6 +39,15 @@ PROXY_ENV_KEYS = frozenset(
 VOLUME_RE = re.compile(r"^factory-job-[0-9a-f-]{36}(-[a-z0-9-]{1,40})?$")
 _NAME_RE = re.compile(r"^[a-z0-9-]{1,40}$")
 _UID = 10001
+
+LABEL_KIND = "factory.kind"
+GITOPS_ROOT = "/git"
+HARDENED_GIT_ENV: Mapping[str, str] = {
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_TERMINAL_PROMPT": "0",
+    "HOME": "/tmp",
+}
 
 
 def volume_name(job_id: UUID) -> str:
@@ -166,5 +175,49 @@ def container_config(
         "Env": [f"{k}={v}" for k, v in env.items()],
         "Labels": labels,
         "HostConfig": host_config,
+        "NetworkingConfig": {"EndpointsConfig": {network: {}}},
+    }
+
+
+def gitops_volume(job_id: UUID) -> str:
+    return f"gitops-{job_id}"
+
+
+def gitops_config(
+    job_id: UUID,
+    *,
+    image: str,
+    network: str,
+    argv: Sequence[str],
+    token: str | None,
+) -> dict[str, Any]:
+    """Hardened config for a credentialed-git container: only the gitops volume, never a job's."""
+    env = dict(HARDENED_GIT_ENV)
+    if token is not None:
+        env["GIT_TOKEN"] = token
+    return {
+        "Image": image,
+        "User": f"{_UID}",
+        "Cmd": list(argv),
+        "WorkingDir": GITOPS_ROOT,
+        "Env": [f"{k}={v}" for k, v in env.items()],
+        "Labels": {
+            LABEL_JOB: str(job_id),
+            LABEL_MANAGED: "true",
+            LABEL_KIND: "gitops",
+        },
+        "HostConfig": {
+            "CapDrop": ["ALL"],
+            "SecurityOpt": ["no-new-privileges:true"],
+            "ReadonlyRootfs": True,
+            "Tmpfs": {"/tmp": "rw,nosuid,nodev,size=256m"},
+            "Init": True,
+            "Mounts": [{"Type": "volume", "Source": gitops_volume(job_id), "Target": GITOPS_ROOT}],
+            "NetworkMode": network,
+            "Memory": 2048 * 2**20,
+            "MemorySwap": 2048 * 2**20,
+            "PidsLimit": 256,
+            "Ulimits": [{"Name": "nofile", "Soft": 4096, "Hard": 4096}],
+        },
         "NetworkingConfig": {"EndpointsConfig": {network: {}}},
     }

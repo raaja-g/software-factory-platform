@@ -58,11 +58,13 @@ services:
     environment:
       <<: *platform-env
       FACTORY_API_TOKEN_FILE: /run/secrets/api_token
+      FACTORY_BROKER_TOKEN_FILE: /run/secrets/broker_token
       FACTORY_DB_STATEMENT_TIMEOUT_S: "30"
       FACTORY_HOST_REPOS_ROOT: ${FACTORY_HOST_REPOS_ROOT:-}
     secrets:
       - pg_password
       - api_token
+      - broker_token
     volumes:
       - ${FACTORY_DEFINITION_PATH}:/definition
       - artifacts:/var/lib/factory/artifacts
@@ -98,8 +100,13 @@ services:
       FACTORY_GATEWAY_SANDBOX_URL: http://gateway-edge:4000
       FACTORY_GATEWAY_CONFIG: /gateway-config/litellm.yaml
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      FACTORY_BROKER_TOKEN_FILE: /run/secrets/broker_token
+      FACTORY_GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github_app_key
+    # The token broker listens on 8091 inside core-net only; it is never published.
     secrets:
       - pg_password
+      - broker_token
+      - github_app_key
     volumes:
       - repos:/repos
       - artifacts:/var/lib/factory/artifacts
@@ -310,8 +317,11 @@ services:
       FACTORY_REGISTRY_ENV_FILE: /run/factory-env
       FACTORY_REGISTRY_ADC_FILE: /run/secrets/registry_credentials
       FACTORY_MIRROR_OUT_DIR: /pkg-auth
+      FACTORY_BROKER_URL: http://orchestrator:8091
+      FACTORY_BROKER_TOKEN_FILE: /run/secrets/broker_token
     secrets:
       - registry_credentials
+      - broker_token
     volumes:
       - ${FACTORY_DEFINITION_PATH}:/definition:ro
       - ./.env:/run/factory-env:ro
@@ -323,7 +333,7 @@ services:
       retries: 12
       start_period: 10s
     restart: unless-stopped
-    networks: [mirror-net]
+    networks: [mirror-net, core-net]
 
   runner:
     profiles: [build]
@@ -347,6 +357,9 @@ networks:
     internal: true
   # A plain bridge with internet: the mirror's own way out. Only pkg-mirror and pkg-mirror-auth join.
   mirror-net: {}
+  # Internet egress for gitops containers only (fixed name); no compose service joins it. M13.2 routes it via the egress proxy.
+  gitops-net:
+    name: gitops-net
 
 volumes:
   pgdata:
@@ -362,5 +375,9 @@ secrets:
     file: ./secrets/pg_password
   api_token:
     file: ./secrets/api_token
+  broker_token:
+    file: ./secrets/broker_token
+  github_app_key:
+    file: ./secrets/github_app_key.pem
   registry_credentials:
     file: ./secrets/registry-credentials.json

@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Protocol
@@ -35,6 +35,7 @@ from swfactory.api.routes import apps as apps_routes
 from swfactory.api.routes import backlogs as backlogs_routes
 from swfactory.api.routes import board as board_routes
 from swfactory.api.routes import definition as definition_routes
+from swfactory.api.routes import hooks as hooks_routes
 from swfactory.api.routes import jobs as jobs_routes
 from swfactory.api.routes import metrics as metrics_routes
 from swfactory.api.routes import models as models_routes
@@ -45,8 +46,10 @@ from swfactory.artifacts import ArtifactStore
 from swfactory.db.engine import make_engine, make_sessionmaker
 from swfactory.definition.models import Defaults
 from swfactory.definition.store import DefinitionStore, NoActiveDefinition
+from swfactory.definition.sync import definition_repo_slug
 from swfactory.domain.types import FactoryMode
 from swfactory.events import EventBus
+from swfactory.github.broker import BrokerAuth, ServerDefinitionWriter
 from swfactory.health import DETECT_EVERY_S, live_workers
 from swfactory.models.catalog import Catalog
 from swfactory.notify import Notifier
@@ -151,6 +154,19 @@ class _SecurityHeaders(BaseHTTPMiddleware):
         return response
 
 
+def _server_writer(settings: Settings, mode: FactoryMode) -> DefinitionWriter | None:
+    """Server mode: definition edits open PRs, with tokens from the broker (no App key here)."""
+    if mode is not FactoryMode.SERVER:
+        return None
+    slug = definition_repo_slug(settings.definition_source)
+    if slug is None:
+        return None
+    if not settings.broker_token_file:
+        log.warning("definition_writer.disabled", reason="FACTORY_BROKER_TOKEN_FILE is not set")
+        return None
+    return ServerDefinitionWriter(BrokerAuth(settings.broker_url, settings.broker_token_file), slug)
+
+
 def _build_deps(settings: Settings, mode: FactoryMode) -> tuple[ApiDeps, Any]:
     engine = make_engine(
         settings.sqlalchemy_url(),
@@ -167,7 +183,7 @@ def _build_deps(settings: Settings, mode: FactoryMode) -> tuple[ApiDeps, Any]:
         catalog=Catalog(sessions, None, definitions),
         definitions=definitions,
         users=UserDirectory(sessions),
-        writer=None,
+        writer=_server_writer(settings, mode),
         settings=settings,
     )
     return deps, engine
@@ -184,6 +200,8 @@ def create_app(
     log.info("startup", mode=mode.value)
     if mode is FactoryMode.SERVER and not settings.iap_audience:
         raise RuntimeError("server mode requires FACTORY_IAP_AUDIENCE")
+    if deps is not None and deps.writer is None:
+        deps = replace(deps, writer=_server_writer(settings, mode))
     personal_token = load_personal_token(settings) if mode is FactoryMode.PERSONAL else ""
 
     @asynccontextmanager
@@ -305,6 +323,7 @@ def create_app(
     ):
         api.include_router(r.router)
     app.include_router(api)
+    app.include_router(hooks_routes.router)  # before /hooks/{name} (M8.8b)
     app.mount("/", _WebFiles(directory=WEB_DIR, html=True, check_dir=False), name="web")
     return app
 

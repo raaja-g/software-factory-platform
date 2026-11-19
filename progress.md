@@ -4,7 +4,7 @@ Updated after every completed step.
 
 ## Now
 
-M7 is done; starting M8 (GitHub and automations). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
+M8 is done; starting M10 (scoring and benchmarks). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
 
 ## Plan revision (before coding)
 
@@ -127,6 +127,20 @@ M7 is done; starting M8 (GitHub and automations). M0's spikes wait for your gclo
 - [x] **2026-11-19** Fixes made while checking: old CLI tests rewritten for the API-based CLI (who-asked now comes from the signed-in user); the gateway stack tests got a mock-model compose override (the gateway now reads a rendered config); a loader test no longer depends on a developer's `.env`; a unit test that was quietly querying the dev database now uses a stub; the notification webhook now reaches the API and worker in compose.
 - [ ] **Needs you:** the live acceptance replay (`make up` then `pytest -m e2e tests/e2e/test_v1_parity.py`) and real registry connections need Vertex credentials, models and your registries.
 
+## M8 GitHub and automations (done)
+
+- [x] **2026-11-20** M8.1 GitHub App and PAT auth; M8.2 GitHub client with a serial mutation queue
+- [x] **2026-11-20** M8.3 Gitops container on a platform-owned repo with a hardened credential helper
+- [x] **2026-11-20** M8.4a PR body and the `factory/review` check; M8.4b GitHubGit with idempotent delivery; M8.4c draft PR at approve; M8.4d delivery pinned to the approved head
+- [x] **2026-11-20** M8.5 Issue intake, webhook and merge detection; M8.5b issue outcomes and withdrawing a PR
+- [x] **2026-11-20** M8.6 PR comment commands; M8.6b follow-up jobs and holding the app slot
+- [x] **2026-11-20** M8.7 New repos (`factory apps create`); M8.7b point-and-run for GitHub repos
+- [x] **2026-11-20** M8.8a Cron schedules; M8.8b signed webhooks
+- [x] **2026-11-20** M8.9 Definition sync and check run; M8.10 token broker and App key isolation; M8.10b GitHub Packages tokens for the mirror
+- [x] **2026-11-20** M8 checked by me: 1198 default tests (the suite ran with Postgres down), all database tests (in chunks), the Docker and dashboard tests (43). The exit-check agent ran 25 minutes with no result, so I stopped it and checked everything myself.
+- [x] **2026-11-20** Fixes found while checking: the log handler kept a closed stream from a test runner and printed "Logging error" noise into CLI output (now writes to the current stderr, and httpx stays quiet); the PyPI proxy of the package mirror served the wheel for a `.metadata` request, so every `uv` install through the mirror failed with a hash mismatch (fixed and verified with a real install); the mirror's publish test used `curl`, which the runner image doesn't have.
+- [ ] **Needs you:** the GitHub App in your org and a real PR round trip (spike S11); the two private-registry mirror tests need a test registry.
+
 ## Milestones
 
 Order for now: everything runs on your Mac. M0, then M1 to M8, then M10, M11 and M12. M9 (the GCP team instance) and the team-only parts of M13 wait until you ask for them. The private package mirror moves earlier, because your first apps need private packages.
@@ -141,7 +155,7 @@ Order for now: everything runs on your Mac. M0, then M1 to M8, then M10, M11 and
 | M5 Gateway, models, cost | done in code; live Vertex checks need your setup |
 | M6 Engines | done in code; live runs need your setup |
 | M7 API, dashboard, CLI, local release | done; live replay needs your setup |
-| M8 GitHub and automations | not started |
+| M8 GitHub and automations | done; live GitHub needs your App |
 | M10 Scoring and benchmarks | not started |
 | M11 Laya | not started |
 | M12 Improver | not started |
