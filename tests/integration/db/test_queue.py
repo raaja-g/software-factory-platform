@@ -257,15 +257,19 @@ async def test_lease_renew_and_expiry(sessions):
     assert (again.id, again.lease_owner) == (j.id, "w2")
 
 
-def test_cli_jobs_create_and_list(pg_url, sessions, tmp_path, monkeypatch):
-    monkeypatch.setenv("FACTORY_DATABASE_URL", pg_url)
+def test_cli_jobs_create_and_list(pg_url, sessions, tmp_path, monkeypatch, api_env):
     init_definition_repo(tmp_path / "d")
     assert CliRunner().invoke(app, ["def", "sync", str(tmp_path / "d")]).exit_code == 0
     r = CliRunner().invoke(app, ["jobs", "create", "--app", "demo", "Add a /health endpoint"])
-    assert r.exit_code == 0 and re.fullmatch(r"queued demo:001 [0-9a-f-]{36}", r.stdout.strip())
-    assert CliRunner().invoke(app, ["jobs", "list"]).stdout.split()[:4] == [
-        "001",
-        "demo",
+    first, link = r.stdout.strip().splitlines()  # the reference line, then the dashboard link
+    assert r.exit_code == 0 and re.fullmatch(r"queued demo:001 ([0-9a-f-]{36})", first)
+    assert link.endswith("/#/job/" + first.split()[-1])
+    listed = CliRunner().invoke(app, ["jobs", "list"]).stdout.split()
+    assert listed[:6] == [
+        "demo:001",
         "queued",
         "Add",
-    ]
+        "a",
+        "/health",
+        "endpoint",
+    ]  # ref, stage, title

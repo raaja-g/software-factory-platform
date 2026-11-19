@@ -25,6 +25,7 @@ from swfactory.db.engine import DURABILITY, make_engine, make_sessionmaker, open
 from swfactory.db.repo import (
     CommandRow,
     LeaseLost,
+    apply_budget_top_up,
     claim_commanded_job,
     command_applied,
     consume_command,
@@ -73,6 +74,7 @@ from swfactory.graph.steps import (
 )
 from swfactory.logging import log_context
 from swfactory.models.triage import TriageService
+from swfactory.notify import Notifier
 from swfactory.queue import claim_next_job, release_job, renew_lease
 from swfactory.roles.library import RoleLibrary
 from swfactory.sandbox.disk import (
@@ -94,6 +96,7 @@ log = structlog.get_logger(__name__)
 
 POLL_S = 5.0
 CATALOG_TICK_S = 300.0
+CATALOG_POLL_S = 15.0
 SHUTDOWN_WAIT_S = 20.0
 _ACTIVE = frozenset(st.value for st in ACTIVE_STAGES)
 
@@ -139,6 +142,7 @@ def build_worker_deps(
             artifacts=artifacts,
             sandboxes=DockerSandboxProvider(  # pyright: ignore[reportArgumentType]
                 lambda: docker.DockerClient(base_url=settings.docker_host),
+                attach=settings.sandbox_attach,
                 output_max_bytes=settings.exec_output_max_bytes,
             ),
             selector=ModelSelector(sessions, real_catalog, events),
@@ -159,6 +163,7 @@ def build_worker_deps(
             definitions=definitions,
             scoring=unavailable("scoring", "M10"),
             settings=settings,
+            docker_client=lambda: docker.DockerClient(base_url=settings.docker_host),
         )
     register_engine(FakeEngine(FakeScript.from_yaml(fake_script)))
     from swfactory.engines.fake import FakeRunGateway, FakeSelector
@@ -407,6 +412,16 @@ async def _gate_answer(
             await consume_command(s, cmd.id, f"refused: {exc}")
             return None
         assert resume is not None
+        if cmd.action == HumanAction.ADD_BUDGET.value:
+            # under the lease, once: a crash before the resume never adds the amount twice
+            _, defn, app_def = await pinned_definition(deps, job_id)
+            await apply_budget_top_up(
+                s,
+                command_id=cmd.id,
+                job_id=job_id,
+                default_usd=app_def.budget_usd or defn.factory.budgets.job_usd,
+                job_max_usd=defn.factory.budgets.job_max_usd,
+            )
         return resume, (cmd.id, wait_id)
 
 
@@ -683,13 +698,18 @@ async def run_worker(
     if lease_s < 3 * renew_s:
         raise ValueError("lease_s must be at least 3 x renew_s")
     url = settings.sqlalchemy_url()
-    engine = make_engine(url)
+    engine = make_engine(
+        url,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        statement_timeout_s=settings.db_statement_timeout_s,
+    )
     sessions = make_sessionmaker(engine)
     try:
         deps = build_worker_deps(
             settings, sessions, fake_script=fake_script, fake_git_state=fake_git_state
         )
-        async with open_checkpointer(url) as cp:
+        async with open_checkpointer(url, max_size=settings.checkpointer_pool_max) as cp:
             await _loop(
                 deps,
                 cp,
@@ -705,10 +725,43 @@ async def run_worker(
         await engine.dispose()
 
 
-async def catalog_tick(catalog: Any) -> None:
-    """One scheduled catalog refresh: never raises (an unreachable gateway is tried again)."""
+async def sync_gateway_config(deps: Deps) -> bool:
+    """Render the active definition into the gateway's config volume and restart the gateway
+    when it changed. Never raises; a failure is retried on the next tick."""
+    path = deps.settings.gateway_config_path
+    if not path or deps.docker_client is None:
+        return False
+    from swfactory.gateway.render import sync_gateway
+
     try:
-        await catalog.refresh_if_due()
+        sha, defn = await deps.definitions.active()
+        return await sync_gateway(
+            defn,
+            sha,
+            deps.docker_client(),
+            conf_path=Path(path),
+            ready_url=f"{deps.settings.gateway_url}/health/readiness",
+        )
+    except NoActiveDefinition:
+        return False
+    except Exception as exc:
+        log.warning("gateway.sync_failed", error=repr(exc))
+        return False
+
+
+async def catalog_tick(deps: Deps) -> None:
+    """One catalog tick (on-demand requests first, then the due refresh): never raises."""
+    from swfactory.models.catalog import catalog_tick as serve
+
+    try:
+        await serve(
+            deps.sessions,
+            deps.catalog,
+            now=datetime.now(UTC),
+            before=(lambda: sync_gateway_config(deps))
+            if deps.settings.gateway_config_path
+            else None,
+        )
     except NoActiveDefinition:
         pass
     except Exception as exc:
@@ -718,9 +771,9 @@ async def catalog_tick(catalog: Any) -> None:
             log.warning("catalog.refresh_failed", error=repr(exc))
 
 
-async def _catalog_loop(catalog: Any, interval_s: float = CATALOG_TICK_S) -> None:
+async def _catalog_loop(deps: Deps, interval_s: float = CATALOG_POLL_S) -> None:
     while True:
-        await catalog_tick(catalog)
+        await catalog_tick(deps)
         await asyncio.sleep(interval_s)
 
 
@@ -742,7 +795,6 @@ async def cost_tick(deps: Deps) -> None:
 
 async def _cost_loop(deps: Deps, interval_s: float = CATALOG_TICK_S) -> None:
     while True:
-        await catalog_tick(deps.catalog)
         await cost_tick(deps)
         await asyncio.sleep(interval_s)
 
@@ -789,6 +841,35 @@ def _disk_allows_claim(settings: Settings, state: dict[str, bool]) -> bool:
     return ok
 
 
+def make_notifier(settings: Settings) -> Notifier:
+    """The worker-side Notifier, for checks that call ``notify_once``."""
+    return Notifier.from_settings(settings)
+
+
+def _worker_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("swfactory")
+    except PackageNotFoundError:
+        return "dev"
+
+
+async def _heartbeat_loop(
+    deps: Deps, worker_id: str, driving: dict[UUID, asyncio.Task[None]], renew_s: float
+) -> None:
+    """Beat on every lease-renew tick (``renew_s``), also when no job is being driven."""
+    from swfactory.health import beat
+
+    while True:
+        try:
+            async with deps.sessions() as s:
+                await beat(s, worker_id=worker_id, jobs=len(driving), version=_worker_version())
+        except Exception as exc:  # the database may be restarting: beat again next tick
+            log.warning("worker.heartbeat_failed", error=repr(exc))
+        await asyncio.sleep(renew_s)
+
+
 async def _reap_loop(deps: Deps, interval_s: float = REAP_INTERVAL_S) -> None:
     while True:
         await reap_tick(deps)
@@ -812,6 +893,28 @@ async def expiry_tick(deps: Deps) -> None:
 async def _expiry_loop(deps: Deps, interval_s: float = EXPIRY_TICK_S) -> None:
     while True:
         await expiry_tick(deps)
+        await asyncio.sleep(interval_s)
+
+
+RUN_REQUEST_TICK_S = 2.0
+
+
+async def run_request_loop(
+    deps: Deps, worker_id: str, interval_s: float = RUN_REQUEST_TICK_S
+) -> None:
+    """Poll for point-and-run requests (no NOTIFY): never raises."""
+    from swfactory.runs import build_run_deps, run_request_tick
+
+    run_deps = build_run_deps(deps.settings, deps.definitions)
+    if run_deps is None:
+        log.info("run_request.disabled", reason="no local definition checkout")
+        return
+    while True:
+        try:
+            while await run_request_tick(deps.sessions, run_deps, worker_id=worker_id):
+                pass
+        except Exception as exc:
+            log.warning("run_request.failed", error=repr(exc))
         await asyncio.sleep(interval_s)
 
 
@@ -857,10 +960,18 @@ async def _loop(
     listener = asyncio.create_task(_listen(settings.libpq_dsn(), wake))
     from swfactory.models.catalog import Catalog
 
-    ticker = asyncio.create_task(_cost_loop(deps)) if isinstance(deps.catalog, Catalog) else None
+    await sync_gateway_config(
+        deps
+    )  # startup; the catalog tick repeats it on every definition change
+
+    real_catalog = isinstance(deps.catalog, Catalog)
+    ticker = asyncio.create_task(_cost_loop(deps)) if real_catalog else None
+    catalog_ticker = asyncio.create_task(_catalog_loop(deps)) if real_catalog else None
     reaper = asyncio.create_task(_reap_loop(deps))
     workspaces = asyncio.create_task(_workspace_loop(deps))
     expirer = asyncio.create_task(_expiry_loop(deps))
+    heart = asyncio.create_task(_heartbeat_loop(deps, worker_id, driving, renew_s))
+    runner = asyncio.create_task(run_request_loop(deps, worker_id))
     disk_state = {"high": False}
     try:
         while True:
@@ -924,8 +1035,12 @@ async def _loop(
         reaper.cancel()
         workspaces.cancel()
         expirer.cancel()
+        heart.cancel()
+        runner.cancel()
         if ticker is not None:
             ticker.cancel()
+        if catalog_ticker is not None:
+            catalog_ticker.cancel()
         for task in driving.values():
             task.cancel()
         await asyncio.gather(
@@ -933,7 +1048,9 @@ async def _loop(
             reaper,
             workspaces,
             expirer,
+            runner,
             *([ticker] if ticker else []),
+            *([catalog_ticker] if catalog_ticker else []),
             *driving.values(),
             return_exceptions=True,
         )

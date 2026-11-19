@@ -44,7 +44,9 @@ def _default_worker_id() -> str:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_ignore_empty=True, extra="ignore", populate_by_name=True
+    )
 
     mode: FactoryMode = Field(default=FactoryMode.PERSONAL, validation_alias="FACTORY_MODE")
     database_url: SecretStr = Field(validation_alias="FACTORY_DATABASE_URL")
@@ -86,11 +88,56 @@ class Settings(BaseSettings):
     gateway_url: str = Field(
         default="http://127.0.0.1:4000", validation_alias="FACTORY_GATEWAY_URL"
     )
+    gateway_config_path: str | None = Field(default=None, validation_alias="FACTORY_GATEWAY_CONFIG")
     gateway_sandbox_url: str = Field(
         default="http://gateway-edge:4000", validation_alias="FACTORY_GATEWAY_SANDBOX_URL"
     )
     gateway_master_key: SecretStr = Field(
         default=SecretStr(""), validation_alias="LITELLM_MASTER_KEY"
+    )
+
+    sandbox_attach: CsvTuple = Field(
+        default=("gateway-edge", "pkg-mirror"), validation_alias="FACTORY_SANDBOX_ATTACH"
+    )
+    registry_env_file: Path | None = Field(
+        default=None, validation_alias="FACTORY_REGISTRY_ENV_FILE"
+    )
+    registry_adc_file: Path | None = Field(
+        default=None, validation_alias="FACTORY_REGISTRY_ADC_FILE"
+    )
+    mirror_out_dir: Path = Field(
+        default=Path("/pkg-auth"), validation_alias="FACTORY_MIRROR_OUT_DIR"
+    )
+
+    iap_audience: str | None = Field(default=None, validation_alias="FACTORY_IAP_AUDIENCE")
+    in_container: bool = Field(default=False, validation_alias="FACTORY_IN_CONTAINER")
+    api_url: str = Field(default="http://127.0.0.1:8080", validation_alias="FACTORY_API_URL")
+    api_token: SecretStr | None = Field(default=None, validation_alias="FACTORY_API_TOKEN")
+    api_token_file: Path = Field(
+        default=Path("secrets/api_token"), validation_alias="FACTORY_API_TOKEN_FILE"
+    )
+    local_user: str = Field(default="local", validation_alias="FACTORY_LOCAL_USER")
+    allowed_hosts: CsvTuple = Field(
+        default=("127.0.0.1", "localhost"), validation_alias="FACTORY_ALLOWED_HOSTS"
+    )
+    public_url: str | None = Field(default=None, validation_alias="FACTORY_PUBLIC_URL")
+    db_pool_size: int = Field(default=5, ge=1, validation_alias="FACTORY_DB_POOL_SIZE")
+    db_max_overflow: int = Field(default=5, ge=0, validation_alias="FACTORY_DB_MAX_OVERFLOW")
+    checkpointer_pool_max: int = Field(
+        default=4, ge=1, validation_alias="FACTORY_CHECKPOINTER_POOL_MAX"
+    )
+    db_statement_timeout_s: int = Field(
+        default=0, ge=0, validation_alias="FACTORY_DB_STATEMENT_TIMEOUT_S"
+    )
+
+    notify_webhook_url: SecretStr | None = Field(
+        default=None, validation_alias="FACTORY_NOTIFY_WEBHOOK_URL"
+    )
+    notify_webhook_url_file: Path | None = Field(
+        default=None, validation_alias="FACTORY_NOTIFY_WEBHOOK_URL_FILE"
+    )
+    notify_waiting_after_h: int = Field(
+        default=4, validation_alias="FACTORY_NOTIFY_WAITING_AFTER_H"
     )
 
     if TYPE_CHECKING:
@@ -109,6 +156,15 @@ class Settings(BaseSettings):
         if self.database_password_file is None:
             return None
         return self.database_password_file.read_text().strip()
+
+    @model_validator(mode="after")
+    def _webhook_from_file(self) -> Self:
+        f = self.notify_webhook_url_file
+        if self.notify_webhook_url is None and f is not None and f.is_file():
+            value = f.read_text().strip()
+            if value:
+                self.notify_webhook_url = SecretStr(value)
+        return self
 
     @model_validator(mode="after")
     def _register_secrets(self) -> Self:

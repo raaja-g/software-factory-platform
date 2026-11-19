@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from langgraph.types import Command
 
-from swfactory.domain.types import TERMINAL_STAGES, HumanAction, Stage
+from swfactory.domain.types import ACTIVE_STAGES, TERMINAL_STAGES, HumanAction, Stage
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class CommandRefused(Exception):
@@ -14,7 +21,13 @@ class CommandRefused(Exception):
 
 
 GATE_ACTIONS = frozenset(
-    {HumanAction.APPROVE, HumanAction.REWORK, HumanAction.REJECT, HumanAction.RETRY}
+    {
+        HumanAction.APPROVE,
+        HumanAction.REWORK,
+        HumanAction.REJECT,
+        HumanAction.RETRY,
+        HumanAction.ADD_BUDGET,
+    }
 )
 
 
@@ -46,7 +59,7 @@ def to_resume(
         raise CommandRefused(f"{action.value} is not a gate action")
     if action == HumanAction.REWORK and not (note or "").strip():
         raise CommandRefused("rework needs a note")
-    if action == HumanAction.RETRY and not retry_offered:
+    if action in (HumanAction.RETRY, HumanAction.ADD_BUDGET) and not retry_offered:
         raise CommandRefused("retry not offered")
     return Command(
         resume={
@@ -56,3 +69,128 @@ def to_resume(
             "command_id": str(command_id) if command_id else "",
         }
     )
+
+
+_REF = re.compile(r"^([^:/#\s]+)[:/#](\d+)$")
+
+
+def parse_job_ref(ref: str) -> UUID | tuple[str, int]:
+    """A uuid or ``<app>:<seq>`` (also ``<app>/3``, ``<app>#003``); else ValueError."""
+    ref = ref.strip()
+    m = _REF.match(ref)
+    if m is not None:
+        return m.group(1), int(m.group(2))
+    return UUID(ref)
+
+
+def format_job_ref(app_slug: str, seq: int) -> str:
+    return f"{app_slug}:{seq:03d}"
+
+
+def retry_offered(waiting: Mapping[str, Any] | None) -> bool:
+    """Whether the graph offered a retry at the latest wait (its ``retry_node`` is set)."""
+    return waiting is not None and waiting.get("retry_node") is not None
+
+
+def action_allowed(action: HumanAction, *, stage: Stage, retry_offered: bool) -> bool:
+    if action is HumanAction.CANCEL:
+        return stage in ACTIVE_STAGES or stage in {
+            Stage.QUEUED,
+            Stage.NEEDS_HUMAN,
+            Stage.FAILED,
+            Stage.DELIVERED,
+        }
+    if action is HumanAction.ADD_BUDGET:
+        return stage is Stage.NEEDS_HUMAN and retry_offered
+    if action is HumanAction.RETRY:
+        return stage is Stage.FAILED or (stage is Stage.NEEDS_HUMAN and retry_offered)
+    if action in GATE_ACTIONS:
+        return stage is Stage.NEEDS_HUMAN
+    return False
+
+
+async def submit_command(
+    s: AsyncSession,
+    *,
+    job_id: UUID,
+    action: HumanAction,
+    note: str | None,
+    requested_by: str,
+    head_sha: str | None = None,
+    source_ref: str | None = None,
+    amount_usd: Decimal | None = None,
+) -> UUID:
+    """The single entry point for human actions (API, CLI, PR comments); never commits."""
+    from swfactory.db.repo import insert_command, latest_waiting, lock_job
+    from swfactory.db.tables import Job
+    from swfactory.graph.build import GRAPH_VERSION
+
+    if source_ref is not None:
+        raise ValueError("source_ref is not supported yet")
+    if action is not HumanAction.ADD_BUDGET and amount_usd is not None:
+        raise CommandRefused("only add_budget takes an amount")
+    if action is HumanAction.ADD_BUDGET and (amount_usd is None or amount_usd <= 0):
+        raise CommandRefused("add_budget needs an amount above zero")
+    await lock_job(s, job_id)
+    job = await s.get(Job, job_id, populate_existing=True)
+    if job is None:
+        raise CommandRefused("no such job")
+    stage = Stage(job.stage)
+    check_command_allowed(action, stage, note)
+    waiting = await latest_waiting(s, job_id) if stage is Stage.NEEDS_HUMAN else None
+    wdata = None if waiting is None else waiting[1]
+    if action is HumanAction.ADD_BUDGET and (wdata is None or wdata.get("reason") != "budget"):
+        raise CommandRefused("only a budget stop can take more budget")
+    if not action_allowed(action, stage=stage, retry_offered=retry_offered(wdata)):
+        if action in (HumanAction.RETRY, HumanAction.ADD_BUDGET):
+            raise CommandRefused("retry not offered")
+        raise CommandRefused("job is not waiting for a person")
+    if (
+        action is HumanAction.RETRY
+        and stage is Stage.FAILED
+        and job.graph_version is not None
+        and job.graph_version != str(GRAPH_VERSION)
+    ):
+        raise CommandRefused("graph version no longer supported")
+    if action is HumanAction.ADD_BUDGET:
+        assert amount_usd is not None
+        job_max = await _job_max_usd(s, job)
+        if job.budget_usd + amount_usd > job_max:
+            raise CommandRefused(f"the job budget can't go above ${job_max}")
+    wait_id: int | None = None
+    if action in GATE_ACTIONS and stage is Stage.NEEDS_HUMAN and waiting is not None:
+        from swfactory.db.repo import pending_gate_command
+
+        wait_id = waiting[0]
+        if await pending_gate_command(s, job_id, wait_id) is not None:
+            raise CommandRefused("an action is already pending for this wait")
+    if action is HumanAction.APPROVE:
+        waiting_sha = None if wdata is None else wdata.get("head_sha")
+        if head_sha is not None and waiting_sha is not None and head_sha != waiting_sha:
+            raise CommandRefused("the branch moved; reload")
+        if head_sha is None:
+            head_sha = waiting_sha
+    return await insert_command(
+        s,
+        job_id=job_id,
+        action=action.value,
+        note=note,
+        requested_by=requested_by,
+        head_sha=head_sha,
+        gate_event_id=wait_id,
+        amount_usd=amount_usd,
+    )
+
+
+async def _job_max_usd(s: AsyncSession, job: Any) -> Decimal:
+    """``budgets.job_max_usd`` of the job's pinned definition (the default when it has none)."""
+    from swfactory.db.tables import DefinitionRow
+    from swfactory.definition.models import Budgets
+
+    content = None
+    if job.definition_sha is not None:
+        row = await s.get(DefinitionRow, job.definition_sha)
+        content = None if row is None else row.content
+    raw = ((content or {}).get("factory") or {}).get("budgets") or {}
+    value = raw.get("job_max_usd")
+    return Decimal(str(value)) if value is not None else Budgets().job_max_usd

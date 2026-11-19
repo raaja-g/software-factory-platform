@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -205,23 +205,82 @@ class Catalog:
     async def refresh_if_due(self, now: datetime | None = None) -> list[ModelInfo] | None:
         """One worker tick: under an advisory lock, refresh what refresh_due says. None when the
         lock is held elsewhere or nothing is due."""
+        assert self.sessions is not None
+        async with self.sessions() as s, s.begin():
+            if not await _try_lock(s):
+                return None
+            return await self._refresh_due(s, now)
+
+    async def _refresh_due(self, s: AsyncSession, now: datetime | None) -> list[ModelInfo] | None:
         from swfactory.db import repo
 
         if self.gateway is None:
             raise RuntimeError("catalog refresh runs in the worker")
-        assert self.sessions is not None and self.definitions is not None
+        assert self.definitions is not None
         now = now or datetime.now(UTC)
         _, defn = await self.definitions.active()
-        async with self.sessions() as s, s.begin():
-            got = await s.scalar(
-                text("select pg_try_advisory_xact_lock(hashtext('catalog_refresh'))")
-            )
-            if not got:
-                return None
-            state = await repo.model_probe_state(s)
-            last = {a: state[a][0] if a in state else None for a in defn.factory.models}
-            quota = {a for a, (_, e) in state.items() if e == "quota"}
-            due = refresh_due(last, aliases_in_use(defn), now, quota=quota)
-            if due is None:
-                return None
-            return await self.refresh(None if set(due) == set(defn.factory.models) else due)
+        state = await repo.model_probe_state(s)
+        last = {a: state[a][0] if a in state else None for a in defn.factory.models}
+        quota = {a for a, (_, e) in state.items() if e == "quota"}
+        due = refresh_due(last, aliases_in_use(defn), now, quota=quota)
+        if due is None:
+            return None
+        return await self.refresh(None if set(due) == set(defn.factory.models) else due)
+
+
+async def _try_lock(s: AsyncSession) -> bool:
+    got = await s.scalar(text("select pg_try_advisory_xact_lock(hashtext('catalog_refresh'))"))
+    return bool(got)
+
+
+_OPEN_REQUEST = text(
+    """
+    select id, data from app.job_events
+    where job_id is null and kind = 'models.refresh_requested'
+      and id > coalesce((select max((data->>'request_id')::bigint) from app.job_events
+                         where job_id is null and kind = 'models.refreshed'), 0)
+    order by id limit 1
+    """
+)
+
+
+async def catalog_tick(
+    sessions: async_sessionmaker[AsyncSession],
+    catalog: Catalog,
+    *,
+    now: datetime,
+    before: Callable[[], Awaitable[bool]] | None = None,
+) -> int | None:
+    """One worker tick under the catalog advisory lock: serve the oldest open
+    ``models.refresh_requested`` event (returns its id), else run the due refresh (returns None).
+    A refresh that raises leaves the request open for the next tick."""
+    from swfactory.events import record_event
+
+    async with sessions() as s, s.begin():
+        if not await _try_lock(s):
+            return None
+        if before is not None and await before():
+            # the gateway restarted with a new config: probe every alias again
+            await catalog.refresh(None)
+        row = (await s.execute(_OPEN_REQUEST)).first()
+        if row is None:
+            await catalog._refresh_due(s, now)  # noqa: SLF001
+            return None
+        request_id = int(row[0])
+        aliases = (row[1] or {}).get("aliases")
+        try:
+            infos = await catalog.refresh(aliases)
+        except Exception as exc:
+            log.warning("catalog.gateway_unreachable", request_id=request_id, error=repr(exc))
+            return None
+        await record_event(
+            s,
+            None,
+            "models.refreshed",
+            {
+                "request_id": request_id,
+                "aliases": list(aliases) if aliases is not None else [i.alias for i in infos],
+                "available": sum(1 for i in infos if i.available),
+            },
+        )
+        return request_id

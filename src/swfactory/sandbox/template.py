@@ -22,7 +22,19 @@ EPHEMERAL_TTL = timedelta(hours=2)
 
 ALLOWED_RUNTIMES = frozenset({"runc", "runsc"})
 PROXY_ENV_KEYS = frozenset(
-    {"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"}
+    {
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "NPM_CONFIG_REGISTRY",
+        "PIP_INDEX_URL",
+        "PIP_TRUSTED_HOST",
+        "UV_DEFAULT_INDEX",
+        "UV_INSECURE_HOST",
+    }
 )
 VOLUME_RE = re.compile(r"^factory-job-[0-9a-f-]{36}(-[a-z0-9-]{1,40})?$")
 _NAME_RE = re.compile(r"^[a-z0-9-]{1,40}$")

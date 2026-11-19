@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Factory floor</title>
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>Software factory</h1>
+    <nav id="nav" aria-label="Pages">
+      <a href="#/" data-route="board">Board</a>
+      <a href="#/new" data-route="new">New job</a>
+      <a href="#/run" data-route="run">New run</a>
+      <a href="#/backlogs" data-route="backlogs">Backlogs</a>
+      <a href="#/apps" data-route="apps">Apps</a>
+      <a href="#/models" data-route="models">Models</a>
+      <a href="#/profiles" data-route="profiles">Profiles</a>
+      <a href="#/definition" data-route="definition">Definition</a>
+      <a href="#/metrics" data-route="metrics">Metrics</a>
+    </nav>
+  </div>
+  <div class="signal" id="signal"><span class="lamp"></span><span class="msg" aria-live="polite">Connecting…</span><span class="read"></span></div>
+</header>
+<p class="notice" id="notice" hidden></p>
+<main id="main"></main>
+
+<dialog class="drawer" id="drawer" aria-labelledby="d-title">
+  <div class="d-wrap">
+    <header class="d-head">
+      <div class="row"><span class="num" id="d-num"></span><h2 id="d-title" tabindex="-1"></h2><button class="btn" id="d-close" type="button">Close</button></div>
+      <div class="d-meta" id="d-meta"></div>
+    </header>
+    <div class="d-andon" id="d-andon" hidden></div>
+    <div class="d-actions" id="d-actions" hidden></div>
+    <div class="tabs" id="d-tabs" role="tablist" aria-label="Job details"></div>
+    <div class="d-body" id="d-body"></div>
+  </div>
+</dialog>
+</body>
+</html>

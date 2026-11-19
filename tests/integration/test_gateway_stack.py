@@ -23,9 +23,14 @@ def _env() -> dict[str, str]:
     return out
 
 
+MOCK_OVERRIDE = "tests/fixtures/gateway/compose.mock.yaml"
+
+
 def _compose(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    # `config` checks the shipped compose.yaml as it is; every other call runs the mock-model stack
+    files = ["-f", "compose.yaml"] + ([] if args[:1] == ("config",) else ["-f", MOCK_OVERRIDE])
     return subprocess.run(
-        ["docker", "compose", "--env-file", ENV_FILE, *args],
+        ["docker", "compose", "--env-file", ENV_FILE, *files, *args],
         cwd=ROOT,
         capture_output=True,
         text=True,

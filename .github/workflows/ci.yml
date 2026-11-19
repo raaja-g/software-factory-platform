@@ -30,8 +30,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
       - run: uv sync --frozen
-      - run: mkdir -p secrets && openssl rand -hex 24 > secrets/pg_password
-      - run: docker compose up -d --wait postgres
+      - run: mkdir -p secrets && openssl rand -hex 24 > secrets/pg_password && printf 'sfp_%s' "$(openssl rand -hex 24)" > secrets/api_token && echo '{}' > secrets/registry-credentials.json && touch .env
+      - run: make test-db
       - run: FACTORY_TEST_DATABASE_URL=postgresql+psycopg://factory:$(cat secrets/pg_password)@127.0.0.1:5432/postgres uv run pytest -m db -q
       - if: always()
         run: docker compose down -v
@@ -43,9 +43,17 @@ jobs:
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
       - run: uv sync --frozen
-      - run: mkdir -p secrets && openssl rand -hex 24 > secrets/pg_password
-      - run: docker compose up -d --wait postgres
+      - run: mkdir -p secrets && openssl rand -hex 24 > secrets/pg_password && printf 'sfp_%s' "$(openssl rand -hex 24)" > secrets/api_token && echo '{}' > secrets/registry-credentials.json && touch .env
+      - run: make test-db
       - run: docker compose --profile build build runner runner-web
       - run: FACTORY_TEST_DATABASE_URL=postgresql+psycopg://factory:$(cat secrets/pg_password)@127.0.0.1:5432/postgres uv run pytest -m docker -q
       - if: always()
         run: docker compose down -v
+  ui:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+      - run: uv sync --frozen
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run pytest -m ui -q

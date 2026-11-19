@@ -62,3 +62,60 @@ async def sessions(pg_url):
         yield make_sessionmaker(engine)
     finally:
         await engine.dispose()
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+@pytest.fixture
+def api_server(pg_url):
+    """A real `factory serve` on a free port, in personal mode, on the test database."""
+    import subprocess
+    import sys
+    import time
+
+    import httpx
+
+    port, token = _free_port(), "sfp_cli-test-token"
+    env = {k: v for k, v in os.environ.items() if k != "FACTORY_DATABASE_PASSWORD_FILE"}
+    env.update(FACTORY_DATABASE_URL=pg_url, FACTORY_MODE="personal", FACTORY_API_TOKEN=token)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "from swfactory.cli.main import app; app()"]
+        + ["serve", "--port", str(port)],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    url = f"http://127.0.0.1:{port}"
+    try:
+        end = time.monotonic() + 30
+        while time.monotonic() < end:
+            try:
+                if httpx.get(f"{url}/healthz", timeout=1).status_code == 200:
+                    break
+            except httpx.HTTPError:
+                time.sleep(0.2)
+        else:
+            raise AssertionError("factory serve did not start")
+        yield url, token
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@pytest.fixture
+def api_env(api_server, pg_url, monkeypatch):
+    """Point the CLI at the live test API and the test database."""
+    url, token = api_server
+    monkeypatch.setenv("FACTORY_DATABASE_URL", pg_url)
+    monkeypatch.delenv("FACTORY_DATABASE_PASSWORD_FILE", raising=False)
+    monkeypatch.setenv("FACTORY_MODE", "personal")
+    monkeypatch.setenv("FACTORY_API_URL", url)
+    monkeypatch.setenv("FACTORY_API_TOKEN", token)
+    get_settings.cache_clear()
+    return url

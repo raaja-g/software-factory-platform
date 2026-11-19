@@ -1,8 +1,51 @@
 {
   "$defs": {
+    "AppAccess": {
+      "additionalProperties": false,
+      "description": "Per-app access lists (emails); an email in several lists gets the highest.",
+      "properties": {
+        "approvers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Approvers",
+          "type": "array"
+        },
+        "submitters": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Submitters",
+          "type": "array"
+        },
+        "viewers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Viewers",
+          "type": "array"
+        }
+      },
+      "title": "AppAccess",
+      "type": "object"
+    },
     "AppDef": {
       "additionalProperties": false,
       "properties": {
+        "access": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AppAccess"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "allowed_profiles": {
           "default": [],
           "items": {
@@ -458,6 +501,18 @@
           ],
           "default": "150",
           "title": "Daily Usd"
+        },
+        "job_max_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "default": "25",
+          "title": "Job Max Usd"
         },
         "job_usd": {
           "anyOf": [
@@ -1475,6 +1530,7 @@
       "default": {
         "app_monthly_usd": {},
         "daily_usd": "150",
+        "job_max_usd": "25",
         "job_usd": "10",
         "step_max_usd": {
           "approver": "0.5",

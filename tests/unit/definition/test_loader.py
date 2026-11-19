@@ -208,7 +208,10 @@ def test_default_policy_comes_from_settings(tmp_path, monkeypatch):
     assert [e.path for e in load_definition(str(d)).errors] == ["providers.openrouter.base_url"]
 
 
-def test_apps_dir_merges_into_apps(tmp_path):
+def test_apps_dir_merges_into_apps(tmp_path, monkeypatch):
+    # not the developer's .env: the folder the sample app lives in is the allowed root here
+    monkeypatch.setenv("FACTORY_HOST_REPOS_ROOT", "/Users/me/work")
+    get_settings.cache_clear()
     d = tmp_path / "d"
     init_definition_repo(d)
     (d / "apps").mkdir()

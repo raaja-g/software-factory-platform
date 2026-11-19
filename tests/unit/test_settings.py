@@ -105,3 +105,7 @@ def test_settings_register_secrets(tmp_path, monkeypatch):
     monkeypatch.setenv("FACTORY_DATABASE_PASSWORD_FILE", str(tmp_path / "pw"))
     Settings(_env_file=None)
     assert "filepw-9876543" not in redact("x filepw-9876543 y")
+
+
+def test_sandbox_attach_default():
+    assert Settings(mode=FactoryMode.PERSONAL).sandbox_attach == ("gateway-edge", "pkg-mirror")

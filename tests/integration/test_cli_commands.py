@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from sqlalchemy import select, update
 from tests.support.db_helpers import activate, enq
@@ -5,16 +7,12 @@ from typer.testing import CliRunner
 
 from swfactory.cli.main import app
 from swfactory.db.tables import Command, Job
-from swfactory.settings import get_settings
 
 pytestmark = pytest.mark.db
 
 
 @pytest.fixture
-async def cli(sessions, pg_url, monkeypatch):
-    monkeypatch.setenv("FACTORY_DATABASE_URL", pg_url)
-    monkeypatch.delenv("FACTORY_DATABASE_PASSWORD_FILE", raising=False)
-    get_settings.cache_clear()
+async def cli(sessions, api_env):
     await activate(sessions, apps={"demo": {}})
     for stage in ("build", "merged", "needs_human"):
         j = await enq(sessions, app="demo")
@@ -45,8 +43,9 @@ async def test_cli_writes_command(cli):
     r = await cli("jobs", "rework", "demo:003", "--note", "Add a test", "--by", "ann")
     assert r.exit_code == 0, r.output
     rows = await commands_rows(cli.sessions)
+    # who asked comes from the signed-in user, never from a --by the client supplies
     assert [(c.action, c.note, c.requested_by, c.consumed_at) for c in rows] == [
-        ("rework", "Add a test", "ann", None)
+        ("rework", "Add a test", "local", None)
     ]
 
 
@@ -56,9 +55,18 @@ async def test_cli_refuses_when_not_waiting(cli):
         "job is not waiting for a person",
     )
     assert outcome(await cli("jobs", "cancel", "demo:002")) == (1, "job has already finished")
-    assert outcome(await cli("jobs", "rework", "demo:003")) == (1, "rework needs a note")
+    assert outcome(await cli("jobs", "rework", "demo:003")) == (2, "rework needs a note")
 
 
-async def test_cli_retry_is_written_even_if_not_offered(cli):
-    assert (await cli("jobs", "retry", "demo:3")).exit_code == 0
-    assert [c.action for c in await commands_rows(cli.sessions)] == ["retry"]
+async def test_cli_retry_is_refused_when_the_graph_offers_none(cli):
+    assert outcome(await cli("jobs", "retry", "demo:3")) == (1, "retry not offered")
+    assert await commands_rows(cli.sessions) == []
+
+
+async def test_cli_accepts_colon_and_slash_refs(cli):
+    shown = []
+    for ref in ("demo:3", "demo/3", "demo:003"):
+        r = await cli("jobs", "show", ref, "--json")
+        assert r.exit_code == 0, (ref, r.output)
+        shown.append(json.loads(r.output)["job_id"])
+    assert len(set(shown)) == 1  # one job, however it is spelled

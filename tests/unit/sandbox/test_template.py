@@ -7,6 +7,7 @@ import pytest
 
 from swfactory.sandbox.base import RunnerSpec
 from swfactory.sandbox.template import (
+    PROXY_ENV_KEYS,
     VOLUME_RE,
     container_config,
     home_volume_name,
@@ -161,3 +162,25 @@ def test_rejects_host_network_and_bind_like_volume():
         isolated_names(JOB, "verified")
     assert verified_volume_name(JOB) == f"factory-job-{JOB}-verified"
     assert VOLUME_RE.fullmatch(verified_volume_name(JOB))
+
+
+def test_mirror_env_is_allowed_and_reaches_the_container():
+    from swfactory.mirror.config import mirror_env
+
+    assert set(mirror_env()) <= PROXY_ENV_KEYS
+    cfg = container_config(
+        JOB, STD, work=volume_name(JOB), home=None, network=NET, expires_at=EXP,
+        proxy_env=mirror_env(),
+    )  # fmt: skip
+    assert set(mirror_env()) <= {e.split("=", 1)[0] for e in cfg["Env"]}
+
+
+@pytest.mark.parametrize(
+    ("attach", "expect"), [(("gateway-edge", "pkg-mirror"), True), (("gateway-edge",), False)]
+)
+def test_provider_sets_mirror_env_only_when_attached(attach, expect):
+    from swfactory.mirror.config import mirror_env
+    from swfactory.sandbox.docker import DockerSandboxProvider
+
+    p = DockerSandboxProvider(lambda: None, attach=attach)  # type: ignore[arg-type]
+    assert (p._proxy_env() == mirror_env()) is expect and (p._proxy_env() is None) is not expect

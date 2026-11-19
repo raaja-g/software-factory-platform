@@ -1,3 +1,14 @@
+# Local release stack (M7.7). Third-party images are pinned by digest (looked up at build time; M0 must confirm).
+x-platform-env: &platform-env
+  FACTORY_MODE: personal
+  FACTORY_DATABASE_URL: postgresql+psycopg://factory@postgres:5432/factory
+  FACTORY_DATABASE_PASSWORD_FILE: /run/secrets/pg_password
+  FACTORY_DEFINITION: /definition
+  FACTORY_ARTIFACTS_DIR: /var/lib/factory/artifacts
+  FACTORY_IN_CONTAINER: "1"
+  FACTORY_HOST_HOME: ${HOME}
+  FACTORY_NOTIFY_WEBHOOK_URL: ${FACTORY_NOTIFY_WEBHOOK_URL:-}
+
 services:
   postgres:
     image: postgres:18.6@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
@@ -15,9 +26,94 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    ports:
-      - "127.0.0.1:5432:5432"
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - idle_in_transaction_session_timeout=300s
+    restart: unless-stopped
     networks: [core-net]
+
+  # One-shot: applies the platform's database migrations.
+  migrate:
+    image: swfactory-platform:dev
+    command: ["db", "upgrade"]
+    environment:
+      <<: *platform-env
+    secrets:
+      - pg_password
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [core-net]
+
+  api:
+    image: swfactory-platform:dev
+    build:
+      context: .
+      dockerfile: docker/platform.Dockerfile
+    command: ["serve", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      <<: *platform-env
+      FACTORY_API_TOKEN_FILE: /run/secrets/api_token
+      FACTORY_DB_STATEMENT_TIMEOUT_S: "30"
+      FACTORY_HOST_REPOS_ROOT: ${FACTORY_HOST_REPOS_ROOT:-}
+    secrets:
+      - pg_password
+      - api_token
+    volumes:
+      - ${FACTORY_DEFINITION_PATH}:/definition
+      - artifacts:/var/lib/factory/artifacts
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:8080/readyz', headers={'Host': '127.0.0.1'}), timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [core-net]
+
+  # Runs the worker: claims jobs, drives sandboxes through the filtered Docker proxy, and holds
+  # the gateway master key (only this service does, section 5).
+  orchestrator:
+    image: swfactory-platform:dev
+    command: ["worker"]
+    environment:
+      <<: *platform-env
+      DOCKER_HOST: tcp://docker-proxy:2375
+      FACTORY_REPOS_DIR: /repos
+      FACTORY_HOST_REPOS_ROOT: ${FACTORY_HOST_REPOS_ROOT}
+      FACTORY_GATEWAY_URL: http://gateway:4000
+      FACTORY_GATEWAY_SANDBOX_URL: http://gateway-edge:4000
+      FACTORY_GATEWAY_CONFIG: /gateway-config/litellm.yaml
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+    secrets:
+      - pg_password
+    volumes:
+      - repos:/repos
+      - artifacts:/var/lib/factory/artifacts
+      - gateway-config:/gateway-config
+      - ${FACTORY_DEFINITION_PATH}:/definition
+      - ${FACTORY_HOST_REPOS_ROOT:?set FACTORY_HOST_REPOS_ROOT in .env}:/host-repos
+    stop_grace_period: 60s
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      docker-proxy:
+        condition: service_started
+    networks: [core-net, docker-net]
 
   # Narrow Docker API for the orchestrator (M7.7). No authentication: nothing else may join docker-net.
   # Digest looked up at build time (3.4.7-r0-ls106); M0 must confirm.
@@ -41,6 +137,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     read_only: true
     tmpfs: [/run]
+    restart: unless-stopped
     networks: [docker-net]
 
   # LiteLLM gateway (M5.2). Image digest looked up at build time (1.108.5); M0 must confirm.
@@ -48,7 +145,7 @@ services:
   gateway:
     image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm-non_root@sha256:838394862b1cbe4d0b295d41e43587c0c4e1cd21a43056b6a0655716375bb819}
     user: "65534"
-    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    command: ["--config", "/gateway-config/litellm.yaml", "--port", "4000"]
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-}
@@ -62,7 +159,7 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     volumes:
-      - ${LITELLM_CONFIG_FILE:-./var/litellm.yaml}:/app/config.yaml:ro
+      - gateway-config:/gateway-config:ro
       - ${GCLOUD_ADC_FILE:-${HOME}/.config/gcloud/application_default_credentials.json}:/secrets/adc.json:ro
     ports:
       - "127.0.0.1:4000:4000"
@@ -76,8 +173,28 @@ services:
       timeout: 5s
       retries: 6
       start_period: 30s
+    restart: unless-stopped
     depends_on:
       gateway-migrate:
+        condition: service_completed_successfully
+      gateway-init:
+        condition: service_completed_successfully
+    networks: [core-net]
+
+  # One-shot: renders the active definition into the gateway-config volume (no host file to go missing).
+  gateway-init:
+    image: swfactory-platform:dev
+    command: ["gateway", "render", "--active", "--out", "/gateway-config/litellm.yaml"]
+    environment:
+      <<: *platform-env
+    secrets:
+      - pg_password
+    volumes:
+      - ${FACTORY_DEFINITION_PATH}:/definition:ro
+      - gateway-config:/gateway-config
+    restart: "no"
+    depends_on:
+      migrate:
         condition: service_completed_successfully
     networks: [core-net]
 
@@ -97,6 +214,7 @@ services:
       interval: 10s
       timeout: 3s
       retries: 6
+    restart: unless-stopped
     networks: [core-net]
 
   # One-shot: creates role and database `litellm` if missing.
@@ -132,6 +250,81 @@ services:
         condition: service_completed_successfully
     networks: [core-net]
 
+  # Package mirror (M7.7c): the only package source job networks reach. Verdaccio serves npm; it never
+  # accepts a publish. Digest looked up at build time (verdaccio 6); M0 (S13) must confirm.
+  # M7.7c attaches it to each job network (alias pkg-mirror) at run time, like gateway-edge.
+  pkg-mirror:
+    image: ${PKG_MIRROR_NPM_IMAGE:-verdaccio/verdaccio@sha256:8c9cd40d28ef134140f4f6c4cef2032ac58bd554cce56757048f81b72717c09c}
+    user: "10001"
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    volumes:
+      - pkg-cache-npm:/verdaccio/storage
+      - pkg-auth:/pkg-auth:ro
+      - ./deploy/pkg-mirror/npm-entrypoint.sh:/entrypoint.sh:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4873/-/ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+    depends_on:
+      pkg-mirror-auth:
+        condition: service_healthy
+    networks: [mirror-net]
+
+  # Read-only PyPI proxy with name-prefix routing (deploy/pkg-mirror/pypi_proxy.py). Shares pkg-mirror's
+  # network namespace, so the alias pkg-mirror serves port 3141 as well.
+  pkg-mirror-pypi:
+    image: ${PKG_MIRROR_PYPI_IMAGE:-python@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90}
+    user: "10001"
+    network_mode: service:pkg-mirror
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    volumes:
+      - pkg-cache-pypi:/var/cache/pkg-mirror
+      - pkg-auth:/pkg-auth:ro
+      - ./deploy/pkg-mirror/pypi-entrypoint.sh:/entrypoint.sh:ro
+      - ./deploy/pkg-mirror/pypi_proxy.py:/opt/pkg-mirror/pypi_proxy.py:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    depends_on:
+      pkg-mirror:
+        condition: service_healthy
+
+  # Token sidecar: the only holder of registry credentials (.env and the registry ADC secret). Renders
+  # the mirror's config from the definition into the pkg-auth volume.
+  pkg-mirror-auth:
+    image: swfactory-platform:dev
+    command: ["mirror", "run", "--out", "/pkg-auth"]
+    environment:
+      FACTORY_MODE: personal
+      FACTORY_DATABASE_URL: postgresql+psycopg://none@localhost/none
+      FACTORY_DEFINITION: /definition
+      FACTORY_REGISTRY_ENV_FILE: /run/factory-env
+      FACTORY_REGISTRY_ADC_FILE: /run/secrets/registry_credentials
+      FACTORY_MIRROR_OUT_DIR: /pkg-auth
+    secrets:
+      - registry_credentials
+    volumes:
+      - ${FACTORY_DEFINITION_PATH}:/definition:ro
+      - ./.env:/run/factory-env:ro
+      - pkg-auth:/pkg-auth
+    healthcheck:
+      test: ["CMD", "test", "-f", "/pkg-auth/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    networks: [mirror-net]
+
   runner:
     profiles: [build]
     image: swfactory/runner:0.1.0
@@ -152,11 +345,22 @@ networks:
   core-net: {}
   docker-net:
     internal: true
+  # A plain bridge with internet: the mirror's own way out. Only pkg-mirror and pkg-mirror-auth join.
+  mirror-net: {}
 
 volumes:
   pgdata:
   repos: {}
+  artifacts: {}
+  gateway-config: {}
+  pkg-cache-npm: {}
+  pkg-cache-pypi: {}
+  pkg-auth: {}
 
 secrets:
   pg_password:
     file: ./secrets/pg_password
+  api_token:
+    file: ./secrets/api_token
+  registry_credentials:
+    file: ./secrets/registry-credentials.json

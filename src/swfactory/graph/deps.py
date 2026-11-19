@@ -32,6 +32,7 @@ class Deps:
     definitions: DefinitionStore
     scoring: Any  # ScoringService (M10)
     settings: Settings
+    docker_client: Any = None  # factory for the Docker client (gateway sync); None: no sync
 
 
 class _Unavailable:

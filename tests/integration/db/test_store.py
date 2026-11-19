@@ -158,8 +158,7 @@ async def test_server_mode_never_activates_dirty(sessions, tmp_path):
     assert (await row(sessions, "dirty-0123456789ab")).active is False
 
 
-def test_cli_def_sync_and_apps_list(pg_url, sessions, tmp_path, monkeypatch):
-    monkeypatch.setenv("FACTORY_DATABASE_URL", pg_url)
+def test_cli_def_sync_and_apps_list(pg_url, sessions, tmp_path, monkeypatch, api_env):
     sha = init_definition_repo(tmp_path / "d")
     r = CliRunner().invoke(app, ["def", "sync", str(tmp_path / "d")])
     assert r.exit_code == 0, r.output

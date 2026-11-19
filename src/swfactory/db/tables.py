@@ -369,11 +369,16 @@ class Command(Base):
     requested_by: Mapped[str] = mapped_column(Text)
     head_sha: Mapped[str | None] = mapped_column(Text)
     gate_event_id: Mapped[int | None] = mapped_column(BigInteger)
+    amount_usd: Mapped[Decimal | None] = _money()
     created_at: Mapped[datetime] = _ts()
     consumed_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
     result: Mapped[Any | None] = _jsonb()
     __table_args__ = (
         _check("commands", "action", HumanAction),
+        CheckConstraint(
+            "amount_usd IS NULL OR (action = 'add_budget' AND amount_usd > 0)",
+            name="commands_amount_usd_check",
+        ),
         Index("commands_job_id_created_at_idx", "job_id", "created_at"),
     )
 
@@ -413,4 +418,43 @@ class BudgetReservation(Base):
     __table_args__ = (
         Index("budget_reservations_job_id_idx", "job_id"),
         Index("budget_reservations_open_idx", "day", postgresql_where=text("released_at IS NULL")),
+    )
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text)
+    sent_at: Mapped[datetime] = _ts()
+
+
+class WorkerHeartbeat(Base):
+    __tablename__ = "worker_heartbeats"
+    worker_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    at: Mapped[datetime] = _ts(default=False)
+    jobs: Mapped[int] = mapped_column(Integer)
+    version: Mapped[str] = mapped_column(Text)
+
+
+class RunRequest(Base):
+    __tablename__ = "run_requests"
+    id: Mapped[uuid.UUID] = _pk()
+    repo: Mapped[str] = mapped_column(Text)
+    requirement: Mapped[str] = mapped_column(Text)
+    profile: Mapped[str | None] = mapped_column(Text)
+    ci_safe: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    budget_usd: Mapped[Decimal | None] = _money()
+    requested_by: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, server_default="pending")
+    app_slug: Mapped[str | None] = mapped_column(Text)
+    backlog_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    detail: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _ts()
+    updated_at: Mapped[datetime] = _ts()
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'waiting', 'started', 'failed')",
+            name="run_requests_status_check",
+        ),
     )

@@ -67,6 +67,7 @@ from swfactory.verify.smoke import screenshot_path
 log = structlog.get_logger(__name__)
 
 MIN_ATTEMPT_S = 60
+PROGRESS_EVERY_S = 300  # a run emits run.progress this often, so 30 quiet minutes means a stall
 TIMEOUT_KEY: Mapping[Role, str] = {
     Role.REQUIREMENTS: "requirements",
     Role.SPEC_WRITER: "spec",
@@ -111,6 +112,22 @@ async def _await_spend(deps: Deps, seconds: float) -> None:
     """Wait for the gateway to flush its spend batch (a fake gateway has none to wait for)."""
     if not getattr(deps.gateway, "instant_spend", False):
         await _sleep(seconds)
+
+
+async def _progress_loop(deps: Deps, job_id: UUID, run_id: UUID) -> None:
+    started = time.monotonic()
+    while True:
+        await asyncio.sleep(PROGRESS_EVERY_S)
+        try:
+            async with deps.sessions() as s, s.begin():
+                await record_event(
+                    s,
+                    job_id,
+                    "run.progress",
+                    {"run_id": str(run_id), "elapsed_s": int(time.monotonic() - started)},
+                )
+        except Exception as exc:  # a missed progress event must never fail the run
+            log.warning("run.progress_failed", error=safe_error(exc))
 
 
 @asynccontextmanager
@@ -901,6 +918,7 @@ async def _run_once(
     run_id, attempt, cap = await _with_daily_wait(reserve, deadline)
     key: str | None = None
     cost: Decimal | None = None
+    progress = asyncio.create_task(_progress_loop(deps, job_id, run_id))
     try:
         with log_context(run_id=run_id):
             run_key: str = await deps.gateway.mint_run_key(
@@ -1097,4 +1115,6 @@ async def _run_once(
                 resume_failed=resume_failed,
             )
     finally:
+        progress.cancel()
+        await asyncio.gather(progress, return_exceptions=True)
         await _close_run(deps, run_id, key, cost)

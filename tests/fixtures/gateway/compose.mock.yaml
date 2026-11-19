@@ -1,0 +1,11 @@
+# Test override: the gateway serves a mock model from a committed config instead of the config that
+# gateway-init renders from the active definition (the stack test has no definition or provider).
+services:
+  gateway:
+    command: ["--config", "/mock/litellm.yaml", "--port", "4000"]
+    volumes: !override
+      - ./tests/fixtures/gateway/mock-litellm.yaml:/mock/litellm.yaml:ro
+      - ${GCLOUD_ADC_FILE}:/secrets/adc.json:ro
+    depends_on: !override
+      gateway-migrate:
+        condition: service_completed_successfully

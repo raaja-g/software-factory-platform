@@ -332,3 +332,10 @@ async def test_log_lines_carry_job_run_and_role(env, capsys):
         str(out.run_id),
         "reviewer-security",
     )
+
+
+async def test_live_run_emits_progress(env, monkeypatch):
+    monkeypatch.setattr(steps, "PROGRESS_EVERY_S", 0.1)
+    await env.build_step(env.deps_for([{"role": "builder", "round": 1, "latency_s": 0.35}]))
+    k = await env.kinds()
+    assert k[0] == "run.started" and k[-1] == "run.finished" and k.count("run.progress") >= 3

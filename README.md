@@ -2,9 +2,9 @@
 
 A platform that turns a requirement into reviewed, merged code. For each feature it runs spec, build, verify, four independent reviews, approve and deliver, using coding agents on any model provider. It runs on your machine in Docker, many apps and features at a time.
 
-**Status: under construction.** Milestones M1 to M6 are built: foundation, the job loop, roles and contracts, sandboxes with the verify gate and local git, the model gateway with cost control, and the coding-agent adapters. Still to come: the local release with the API, dashboard and point-and-run (M7) and GitHub (M8). See [progress.md](progress.md) for the step-by-step status.
+**Status: under construction.** Milestones M1 to M7 are built: foundation, the job loop, roles and contracts, sandboxes with the verify gate and local git, the model gateway with cost control, the coding-agent adapters, and now the API, dashboard, CLI and a one-command local release. Still to come: GitHub (M8), scoring and benchmarks (M10), Laya routing (M11) and the improver (M12). See [progress.md](progress.md).
 
-## What works now (M1 and M2)
+## What works now (M1 to M7)
 
 - A Python package, `swfactory`, with a `factory` command line.
 - Settings from the environment, and logs that redact secrets.
@@ -39,7 +39,19 @@ uv run factory models refresh
 
 - **Coding engines (M6).** Agent steps run behind one `Engine` interface with four adapters: OpenCode (the default for team profiles, any model through the gateway), Claude Code (`claude-vertex` profile, Claude models, or other models as an experiment), Gemini CLI (optional), and a direct single call to the gateway for steps that need no tools (approver, judges). The CLIs are installed in the runner image from a committed lockfile (OpenCode 1.19.5, Claude Code 2.1.322, Gemini CLI 0.68.0). Each adapter enforces the role's tool policy (read-only roles cannot write files, reviewers can run tests but not edit), ignores project-level engine config in the repo, reports usage and cost per run, and detects when a model was silently swapped. Builder commits carry trailers naming the job, role and model. A builder can start each round fresh (default) or resume its session.
 
-Run a real job (needs the gateway running and the Claude and Gemini models you use enabled):
+- **API, dashboard and CLI (M7).** `make up` starts the whole stack (Postgres, the model gateway behind its route filter, the package mirror, a filtered Docker socket proxy, the API with the dashboard, and the worker) and prints a one-time login URL.
+  - The dashboard is a live board (server-sent events) with a card per job: stage, round, cost, the model each role used, and approve, rework, reject, retry or cancel at a gate. It has pages for backlogs, apps, models, profiles and the active definition. Model-written and repo-written text is rendered as escaped text, behind a content-security policy.
+  - Every `/api` call needs a token, even locally. Roles (viewer, submitter, approver, admin) apply, and an app can limit who sees it. Who approved is taken from the signed-in user, never from what a client says. Tokens expire (90 days) and can be listed and revoked (`factory tokens ...`).
+  - **Point at a repo with a requirement:** `factory run --repo ~/work/my-app --req ./requirement.md` (or `--req -` for stdin, or the dashboard's New run form). The repo is registered on first use. A requirements agent turns the text into a full requirements document and an ordered backlog; you approve it once; the feature jobs then run one after another, each merged before the next starts. `factory backlog list|show|resume|skip|cancel` manages them.
+  - **Local folders:** the factory works in its own copy and fast-forwards your folder's main afterwards; if your working tree is dirty or main moved, the job waits with a clear reason.
+  - **Budgets:** a job that stops at its budget waits for you, and an admin can top it up (`factory jobs add-budget`) within a hard limit.
+  - **Private packages:** sandboxes install through a read-only package mirror (`pkg-mirror`) that holds the registry credentials (Artifact Registry, GitHub Packages or a token registry, configured under `registries:` in your definition, credentials from `.env`), so code in a sandbox can neither see a credential nor publish a package.
+  - **Health and alerts:** workers send heartbeats, a stuck-job detector runs in the API, and notices (stuck or failed jobs, long waits, no live worker, 80% and 100% of the daily budget, disk space) go to a Slack- or Google Chat-style webhook set in `FACTORY_NOTIFY_WEBHOOK_URL` (`factory notify test`).
+  - The gateway's config is rendered from your definition at start and whenever the definition changes; `FACTORY_DEFINITION_PATH` and `FACTORY_HOST_REPOS_ROOT` in `.env` are required.
+
+Not verified live: the acceptance replay of v1's four features with real models (`tests/e2e/test_v1_parity.py`, opt-in) has not been run, and the registry connections to real Artifact Registry and GitHub Packages are tested only against mock upstreams. The engines and the gateway still have not run against real models.
+
+Run a real job from the command line (needs the gateway running and the Claude and Gemini models you use enabled):
 
 ```bash
 docker compose --profile build build runner runner-web
@@ -53,7 +65,22 @@ An opt-in end-to-end test builds one small feature per engine on cheap models: `
 
 **Not yet verified against real models.** The adapter tests use stub CLIs and fixtures written by hand from each CLI's documented output, because no credentials were available; the live checks (`factory models refresh`, the end-to-end tests) need your gcloud login and the models enabled in Model Garden, and may turn up differences in the real CLIs' output. Sandboxes still have open internet access: the `allowed_hosts` list is not enforced until the egress proxy and internal job networks (M13).
 
-## Set up and run
+## Quickstart (local release)
+
+1. Prerequisites: Docker Desktop, [uv](https://docs.astral.sh/uv/), and Google Application Default Credentials for Vertex AI: `gcloud auth application-default login`, then `gcloud auth application-default set-quota-project <your-project>`.
+2. Create your definition repo: `uv run factory init ~/factory-definition`.
+3. Copy `.env.example` to `.env` and set `FACTORY_DEFINITION_PATH` (the full path of that folder), `GOOGLE_CLOUD_PROJECT`, the `LITELLM_*` values, and `FACTORY_HOST_REPOS_ROOT`, the folder your repos live under, such as `/Users/you/work`. Docker Desktop must share that folder (Settings, Resources, File sharing).
+4. `make up` builds the image, creates `secrets/pg_password` and `secrets/api_token` if missing, starts the stack and prints a one-time login URL.
+5. Open that URL (or run `factory login-url` for a fresh one) at `http://127.0.0.1:8080`.
+6. Link the skill: `ln -s "$PWD/claude-skill/factory" ~/.claude/skills/factory`.
+7. Run it on a repo: `factory run --repo ~/work/my-app --req ./requirement.md`.
+8. `make down` stops the stack and keeps your data (`make login` prints a new login URL).
+
+**Trusted repos only on a Mac.** Docker Desktop has no gVisor, so sandboxes share the Linux VM kernel. Run the factory only on repos you trust. The API needs the token even locally: every `/api` call without it returns 401.
+
+Services: `postgres`, `migrate`, `gateway-db`, `gateway`, `gateway-edge`, `gateway-migrate`, `docker-proxy`, `api` and `orchestrator`. Only `127.0.0.1:8080` (dashboard and API) and `127.0.0.1:4000` (gateway) are published. `make test-db` starts Postgres on `127.0.0.1:5432` for the `db` tests; `make image` builds the multi-arch image.
+
+## Set up and run (development)
 
 You need Docker, [uv](https://docs.astral.sh/uv/) and Python 3.12 or 3.13 (uv fetches it).
 
@@ -61,7 +88,7 @@ You need Docker, [uv](https://docs.astral.sh/uv/) and Python 3.12 or 3.13 (uv fe
 uv sync
 mkdir -p secrets && openssl rand -hex 16 > secrets/pg_password
 cp .env.example .env
-docker compose up -d --wait postgres
+make test-db   # Postgres on 127.0.0.1:5432 plus migrations
 
 uv run factory init ~/factory-definition
 uv run factory def validate ~/factory-definition
@@ -87,4 +114,4 @@ uv run pytest -m docker                         # builds and uses real container
 
 ## Next
 
-M7: the API, dashboard and CLI, `factory run --repo ... --req ...` (point at a repo with a requirement), the private package mirror, and a one-command local release. Then GitHub (M8).
+M8: GitHub: a GitHub App for issue intake, pull requests, checks and comment commands (`/factory approve`), webhooks and schedules. Then scoring and benchmarks (M10), Laya model routing with your synthetic data (M11) and the improver (M12). The GCP team instance (M9) and the hardening that only matters for it come later, when you ask.

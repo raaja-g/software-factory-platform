@@ -98,11 +98,18 @@ def max_turns_for(defaults: Defaults, role: str) -> int:
 
 class Budgets(StrictModel):
     job_usd: Decimal = Decimal("10")
+    job_max_usd: Decimal = Decimal("25")
     daily_usd: Decimal = Decimal("150")
     app_monthly_usd: dict[str, Decimal] = {}
     step_max_usd: dict[str, Decimal] = Field(
         default_factory=lambda: {r.value: v for r, v in STEP_MAX_DEFAULT_USD.items()}
     )
+
+    @model_validator(mode="after")
+    def _job_max(self) -> "Budgets":
+        if self.job_max_usd < self.job_usd:
+            raise ValueError("job_max_usd must be at least job_usd")
+        return self
 
     @field_validator("step_max_usd", mode="before")
     @classmethod
@@ -283,6 +290,21 @@ class SmokeConfig(StrictModel):
         return self
 
 
+class AppAccess(StrictModel):
+    """Per-app access lists (emails); an email in several lists gets the highest."""
+
+    viewers: tuple[str, ...] = ()
+    submitters: tuple[str, ...] = ()
+    approvers: tuple[str, ...] = ()
+
+    @field_validator("viewers", "submitters", "approvers", mode="before")
+    @classmethod
+    def _emails(cls, v: Any) -> Any:
+        if isinstance(v, (list, tuple)):
+            return tuple(x.strip().lower() if isinstance(x, str) else x for x in v)
+        return v
+
+
 class AppDef(StrictModel):
     repo_kind: Literal["github", "local"]
     repo_url: str
@@ -317,6 +339,7 @@ class AppDef(StrictModel):
     budget_usd: Decimal | None = None
     concurrency: int | None = None
     smoke: SmokeConfig | None = None
+    access: AppAccess | None = None
 
     @model_validator(mode="after")
     def _check(self) -> "AppDef":

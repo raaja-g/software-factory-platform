@@ -4,7 +4,7 @@ Updated after every completed step.
 
 ## Now
 
-M6 is done; starting M7 (API, dashboard, CLI, local release). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
+M7 is done; starting M8 (GitHub and automations). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
 
 ## Plan revision (before coding)
 
@@ -107,6 +107,26 @@ M6 is done; starting M7 (API, dashboard, CLI, local release). M0's spikes wait f
 - [x] **2026-11-19** Security fixes: instruction-file cleanup is one fail-closed `find ... -exec rm` and covers every engine's config; errors are logged without URLs that could hold a run key.
 - [ ] **Needs you:** live runs of each engine against real models (gcloud ADC, Model Garden access).
 
+## M7 API, dashboard, CLI, local release (done)
+
+- [x] **2026-11-19** M7.1 API app, health, auth and mode safety
+- [x] **2026-11-19** M7.2 Board, jobs and actions routes, and `submit_command`
+- [x] **2026-11-19** M7.3 Server-sent events
+- [x] **2026-11-19** M7.4a Definition writer
+- [x] **2026-11-19** M7.4b Apps, models, profiles, definition and metrics routes
+- [x] **2026-11-19** M7.4c Per-app access lists
+- [x] **2026-11-19** M7.4d First-use registration (`apps/<slug>.yaml`)
+- [x] **2026-11-19** M7.4e Backlog routes and actions
+- [x] **2026-11-19** M7.5 Dashboard v2, and M7.5b Backlogs view
+- [x] **2026-11-19** M7.6 CLI parity, backlog import and the Claude Code skill; M7.6b budget top-up; M7.6c point-and-run (`factory run`)
+- [x] **2026-11-19** M7.7 Local release (image, compose, make); M7.7b gateway config rendering; M7.7c package mirror with private registries
+- [x] **2026-11-19** M7.9 Worker heartbeats and stuck-job detector; M7.9b notifications and the API watchdog
+- [x] **2026-11-19** M7.10 CI workflow
+- [x] **2026-11-19** M7.8 Acceptance replay of v1's four features: the helpers and report are built and tested; the live replay is opt-in and skips without models.
+- [x] **2026-11-19** M7 checked by me: 1016 default tests (run with Postgres down, so none depends on the database), all database tests (run in chunks), 80 Docker tests and 42 dashboard tests pass; `make up` brings the whole stack healthy in 38 s and `/readyz` shows one worker, the database and the definition.
+- [x] **2026-11-19** Fixes made while checking: old CLI tests rewritten for the API-based CLI (who-asked now comes from the signed-in user); the gateway stack tests got a mock-model compose override (the gateway now reads a rendered config); a loader test no longer depends on a developer's `.env`; a unit test that was quietly querying the dev database now uses a stub; the notification webhook now reaches the API and worker in compose.
+- [ ] **Needs you:** the live acceptance replay (`make up` then `pytest -m e2e tests/e2e/test_v1_parity.py`) and real registry connections need Vertex credentials, models and your registries.
+
 ## Milestones
 
 Order for now: everything runs on your Mac. M0, then M1 to M8, then M10, M11 and M12. M9 (the GCP team instance) and the team-only parts of M13 wait until you ask for them. The private package mirror moves earlier, because your first apps need private packages.
@@ -120,7 +140,7 @@ Order for now: everything runs on your Mac. M0, then M1 to M8, then M10, M11 and
 | M4 Sandboxes, verify gate, local git | done |
 | M5 Gateway, models, cost | done in code; live Vertex checks need your setup |
 | M6 Engines | done in code; live runs need your setup |
-| M7 API, dashboard, CLI, local release | not started |
+| M7 API, dashboard, CLI, local release | done; live replay needs your setup |
 | M8 GitHub and automations | not started |
 | M10 Scoring and benchmarks | not started |
 | M11 Laya | not started |

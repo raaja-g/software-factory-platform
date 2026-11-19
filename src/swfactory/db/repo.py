@@ -13,7 +13,7 @@ from sqlalchemy import and_, case, func, insert, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from swfactory.commands import GATE_ACTIONS
+from swfactory.commands import GATE_ACTIONS, parse_job_ref
 from swfactory.db.tables import (
     AgentRun,
     App,
@@ -29,6 +29,7 @@ from swfactory.domain.types import (
     TERMINAL_STAGES,
     CostSource,
     HumanAction,
+    JobKind,
     RunStatus,
     Stage,
     Usage,
@@ -329,15 +330,15 @@ async def resolve_job_ref(s: AsyncSession, ref: str) -> Job:
     """A job by uuid or ``<app>:<seq>`` (seq with or without zero padding)."""
     ref = ref.strip()
     try:
-        job = await s.get(Job, UUID(ref))
+        parsed = parse_job_ref(ref)
     except ValueError:
-        app_slug, sep, seq = ref.rpartition(":")
-        if not sep or not app_slug or not seq.isdigit():
-            raise JobRefError(f"bad job reference '{ref}'") from None
+        raise JobRefError(f"bad job reference '{ref}'") from None
+    if isinstance(parsed, UUID):
+        job = await s.get(Job, parsed)
+    else:
+        app_slug, seq = parsed
         job = await s.scalar(
-            select(Job)
-            .join(App, App.id == Job.app_id)
-            .where(App.slug == app_slug, Job.seq == int(seq))
+            select(Job).join(App, App.id == Job.app_id).where(App.slug == app_slug, Job.seq == seq)
         )
     if job is None:
         raise JobRefError(f"no such job '{ref}'")
@@ -353,13 +354,16 @@ class CommandRow:
     requested_by: str
     head_sha: str | None
     gate_event_id: int | None = None
+    amount_usd: Decimal | None = None
 
 
 _GATE = tuple(a.value for a in GATE_ACTIONS)
 
 
 def _command_row(c: Command) -> CommandRow:
-    return CommandRow(c.id, c.job_id, c.action, c.note, c.requested_by, c.head_sha, c.gate_event_id)
+    return CommandRow(
+        c.id, c.job_id, c.action, c.note, c.requested_by, c.head_sha, c.gate_event_id, c.amount_usd
+    )
 
 
 async def insert_command(
@@ -369,7 +373,9 @@ async def insert_command(
     action: str,
     note: str | None,
     requested_by: str,
+    head_sha: str | None = None,
     gate_event_id: int | None = None,
+    amount_usd: Decimal | None = None,
 ) -> UUID:
     cid = await s.scalar(
         insert(Command)
@@ -378,12 +384,37 @@ async def insert_command(
             action=action,
             note=note,
             requested_by=requested_by,
+            head_sha=head_sha,
             gate_event_id=gate_event_id,
+            amount_usd=amount_usd,
         )
         .returning(Command.id)
     )
     assert cid is not None
     return cid
+
+
+async def apply_budget_top_up(
+    s: AsyncSession, *, command_id: UUID, job_id: UUID, default_usd: Decimal, job_max_usd: Decimal
+) -> Decimal | None:
+    """Raise the job's budget by the command's amount, once; the new budget, or None if done."""
+    marked = await s.scalar(
+        text(
+            "UPDATE app.commands SET result = to_jsonb('budget added'::text) "
+            "WHERE id = :c AND result IS NULL AND action = 'add_budget' "
+            "AND amount_usd IS NOT NULL RETURNING amount_usd"
+        ),
+        {"c": command_id},
+    )
+    if marked is None:
+        return None
+    return await s.scalar(
+        text(
+            "UPDATE app.jobs SET budget_usd = LEAST(coalesce(budget_usd, :d) + :a, :m) "
+            "WHERE id = :j RETURNING budget_usd"
+        ),
+        {"d": default_usd, "a": marked, "m": job_max_usd, "j": job_id},
+    )
 
 
 async def next_command(s: AsyncSession, job_id: UUID) -> CommandRow | None:
@@ -626,19 +657,52 @@ async def requeue_failed(s: AsyncSession, *, job_id: UUID, command_id: UUID, by:
     await consume_command(s, command_id, "requeued")
 
 
+BOARD_KINDS = (JobKind.NORMAL.value, JobKind.REQUIREMENTS.value)
+
+
+async def list_jobs(
+    s: AsyncSession,
+    *,
+    app_slug: str | None,
+    stage: Stage | None,
+    limit: int = 50,
+    app_slugs: Collection[str] | None = None,
+) -> list[Job]:
+    """Normal and requirements jobs, newest first (benchmark and improver jobs have own pages)."""
+    q = (
+        select(Job)
+        .outerjoin(App, App.id == Job.app_id)
+        .where(Job.kind.in_(BOARD_KINDS))
+        .order_by(Job.created_at.desc(), Job.seq.desc())
+        .limit(limit)
+    )
+    if app_slug is not None:
+        q = q.where(App.slug == app_slug)
+    if app_slugs is not None:
+        q = q.where(App.slug.in_(list(app_slugs)))
+    if stage is not None:
+        q = q.where(Job.stage == stage.value)
+    return list((await s.scalars(q)).all())
+
+
 def _iso(dt: datetime) -> str:
     return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-async def board(s: AsyncSession, *, app_slug: str | None = None) -> dict[str, Any]:
+async def board(
+    s: AsyncSession, *, app_slug: str | None = None, app_slugs: Collection[str] | None = None
+) -> dict[str, Any]:
     """Jobs in v1's board.json shape plus app, cost and models (one query per table)."""
     q = (
         select(Job, App.slug)
         .join(App, App.id == Job.app_id)
+        .where(Job.kind.in_(BOARD_KINDS))
         .order_by(Job.updated_at.desc(), Job.seq.desc())
     )
     if app_slug is not None:
         q = q.where(App.slug == app_slug)
+    if app_slugs is not None:
+        q = q.where(App.slug.in_(list(app_slugs)))
     found = (await s.execute(q)).all()
     ids = [j.id for j, _ in found]
     # latest attempt per (job, role, round), verdict taken from the reviewer roles

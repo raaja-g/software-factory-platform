@@ -176,7 +176,7 @@ async def resume_without_consuming(cid):
 
 
 @pytest.fixture
-async def cli():
+async def cli(api_env):
     loop = asyncio.get_running_loop()
 
     async def call(*args):

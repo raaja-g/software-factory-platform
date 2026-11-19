@@ -13,9 +13,30 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from swfactory.gateway.render import LITELLM_DB_POOL_LIMIT
+from swfactory.settings import Settings
 
-def make_engine(url: str) -> AsyncEngine:
-    return create_async_engine(url, pool_pre_ping=True)
+PG_MAX_CONNECTIONS = 100
+_ADMIN_RESERVE = 10  # migrate, backups and admin shells
+
+
+def make_engine(
+    url: str, *, pool_size: int = 5, max_overflow: int = 5, statement_timeout_s: int = 0
+) -> AsyncEngine:
+    kwargs: dict[str, Any] = {}
+    if statement_timeout_s > 0:
+        kwargs["connect_args"] = {"options": f"-c statement_timeout={statement_timeout_s * 1000}"}
+    return create_async_engine(
+        url, pool_pre_ping=True, pool_size=pool_size, max_overflow=max_overflow, **kwargs
+    )
+
+
+def connection_budget(settings: Settings) -> int:
+    """Postgres connections the default stack can open: one api, one worker, LiteLLM, admin."""
+    pool = settings.db_pool_size + settings.db_max_overflow
+    api = pool + 1  # LISTEN
+    worker = pool + settings.checkpointer_pool_max + 2  # LISTEN: commands, definition sync
+    return api + worker + LITELLM_DB_POOL_LIMIT + _ADMIN_RESERVE
 
 
 def make_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
@@ -40,9 +61,11 @@ def _conninfo(database_url: str) -> str:
 
 
 @asynccontextmanager
-async def open_checkpointer(database_url: str) -> AsyncIterator[AsyncPostgresSaver]:
+async def open_checkpointer(
+    database_url: str, *, max_size: int = 4
+) -> AsyncIterator[AsyncPostgresSaver]:
     pool = AsyncConnectionPool(
-        _conninfo(database_url), kwargs=checkpointer_pool_kwargs(), open=False
+        _conninfo(database_url), kwargs=checkpointer_pool_kwargs(), max_size=max_size, open=False
     )
     await pool.open()
     try:

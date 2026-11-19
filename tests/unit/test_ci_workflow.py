@@ -63,3 +63,51 @@ def test_ci_docker_job_builds_images_and_sets_db():
     test = next(i for i, r in enumerate(runs) if r.endswith("uv run pytest -m docker -q"))
     assert build < test and runs[test].startswith("FACTORY_TEST_DATABASE_URL=")
     assert any(r in ("docker compose up -d --wait postgres", "make test-db") for r in runs[:test])
+
+
+def load(path: str) -> dict:
+    return yaml.safe_load(Path(path).read_text())
+
+
+def run_lines(node: dict) -> list[str]:
+    steps = (
+        node["steps"] if "steps" in node else [s for j in node["jobs"].values() for s in j["steps"]]
+    )
+    return [
+        re.sub(r"^FACTORY_TEST_DATABASE_URL=(?:\$\([^)]*\)|\S)+\s+", "", s["run"])
+        for s in steps
+        if "run" in s
+    ]
+
+
+def job(name: str) -> dict:
+    return load(".github/workflows/ci.yml")["jobs"][name]
+
+
+def test_jobs():
+    assert set(load(".github/workflows/ci.yml")["jobs"]) == {"lint", "unit", "db", "docker", "ui"}
+
+
+def test_four_pytest_runs():
+    cmds = [c.strip() for c in run_lines(load(".github/workflows/ci.yml"))]
+    assert [c for c in cmds if c.startswith("uv run pytest")] == [
+        "uv run pytest -q",
+        "uv run pytest -m db -q",
+        "uv run pytest -m docker -q",
+        "uv run pytest -m ui -q",
+    ]
+
+
+def test_db_job_starts_compose_postgres():
+    assert "make test-db" in [c.strip() for c in run_lines(job("db"))]
+    assert "make test-db" in [c.strip() for c in run_lines(job("docker"))]
+
+
+def test_ui_job_installs_chromium():
+    runs = [c.strip() for c in run_lines(job("ui"))]
+    assert "uv run playwright install --with-deps chromium" in runs
+
+
+def test_no_live_or_e2e_in_ci():
+    runs = run_lines(load(".github/workflows/ci.yml"))
+    assert [c for c in runs if re.search(r"-m\s+['\"]?(live|e2e)", c)] == []

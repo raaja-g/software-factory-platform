@@ -1,6 +1,12 @@
 import pytest
 
-from swfactory.commands import GATE_ACTIONS, CommandRefused, check_command_allowed, to_resume
+from swfactory.commands import (
+    GATE_ACTIONS,
+    CommandRefused,
+    action_allowed,
+    check_command_allowed,
+    to_resume,
+)
 from swfactory.domain.types import TERMINAL_STAGES, HumanAction, Stage
 
 
@@ -66,3 +72,21 @@ def test_failed_job_accepts_retry_and_cancel(action, ok):
     else:
         with pytest.raises(CommandRefused):
             check_command_allowed(action, Stage.FAILED, "n")
+
+
+def test_add_budget_resumes_like_retry():
+    cmd = to_resume(HumanAction.ADD_BUDGET, note=None, by="ad", retry_offered=True)
+    assert cmd is not None
+    r: dict = cmd.resume  # pyright: ignore[reportAssignmentType]
+    assert (r["action"], r["by"]) == ("add_budget", "ad")
+    with pytest.raises(CommandRefused, match="retry not offered"):
+        to_resume(HumanAction.ADD_BUDGET, note=None, by="ad", retry_offered=False)
+
+
+def test_add_budget_allowed_where_retry_is():
+    got = [
+        action_allowed(HumanAction.ADD_BUDGET, stage=Stage.NEEDS_HUMAN, retry_offered=o)
+        for o in (True, False)
+    ]
+    assert got == [True, False]
+    assert action_allowed(HumanAction.ADD_BUDGET, stage=Stage.BUILD, retry_offered=True) is False

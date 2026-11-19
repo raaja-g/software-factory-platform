@@ -23,6 +23,7 @@ import structlog
 from docker.errors import APIError, NotFound
 
 from swfactory.gitops.service import SAFE_GIT_ENV
+from swfactory.mirror.config import MIRROR_HOST, mirror_env
 from swfactory.sandbox import paths
 from swfactory.sandbox.base import (
     READ_BYTES_MAX,
@@ -451,6 +452,9 @@ class DockerSandboxProvider:
             self._client_ = self._factory()
         return self._client_
 
+    def _proxy_env(self) -> dict[str, str] | None:
+        return mirror_env() if MIRROR_HOST in self._attach else None
+
     # -- sync helpers (run in threads) -----------------------------------
     def _image_digest(self, image: str) -> str:
         attrs = self._client.images.get(image).attrs
@@ -539,6 +543,7 @@ class DockerSandboxProvider:
                 home=home_volume_name(job_id),
                 network=job_network_name(job_id),
                 expires_at=_expires(SANDBOX_TTL),
+                proxy_env=self._proxy_env(),
             )
             self._create_container(cname, cfg)
         elif state != "running" and job_id not in self._marks:
@@ -699,6 +704,7 @@ class DockerSandboxProvider:
             network=job_network_name(job_id),
             snapshot=volume_name(job_id),
             expires_at=_expires(EPHEMERAL_TTL),
+            proxy_env=self._proxy_env(),
         )
         self._create_container(cname, cfg)
         return cname
@@ -770,6 +776,7 @@ class DockerSandboxProvider:
             network=job_network_name(job_id),
             snapshot=verified_volume_name(job_id),
             expires_at=_expires(EPHEMERAL_TTL),
+            proxy_env=self._proxy_env(),
         )
         self._create_container(cname, cfg)
         return cname, vol
