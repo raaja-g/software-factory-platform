@@ -128,3 +128,16 @@ def loop(sessions):
         return await collect(sessions, deps, job.id, st, box)
 
     return SimpleNamespace(run=run)
+
+
+@pytest.fixture(autouse=True)
+def _fake_box_cannot_run_python_discovery(monkeypatch):
+    """The hidden-checks sanitizer asks the box's python which module names are protected. A fake
+    box runs no python (and answers exit 0 to `test -x .venv/bin/python`), so stub that discovery;
+    it is tested on real processes in tests/unit/bench/test_sanitize_shadow.py."""
+    from swfactory.bench import sanitize
+
+    async def discovered(box):
+        return frozenset({"pluggy", "json", "pytest"})
+
+    monkeypatch.setattr(sanitize, "_protected_names", discovered)

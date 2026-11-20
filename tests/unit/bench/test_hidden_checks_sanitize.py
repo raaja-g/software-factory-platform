@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from tests.fakes.artifacts import InMemoryArtifactStore
 
-from swfactory.bench import runner
+from swfactory.bench import runner, sanitize
 from swfactory.bench.runner import HIDDEN_CHECKS_BOX, HIDDEN_LOG, run_hidden_checks
 from swfactory.definition.models import BenchTaskDef
 from swfactory.sandbox.base import ExecResult, RunnerSpec
@@ -164,8 +164,15 @@ async def test_check_command_runs_under_plain_bash_not_a_login_shell(monkeypatch
     ]
 
 
-async def test_real_sanitizer_is_wired_in_and_does_not_disturb_the_fake_box():
-    """Without the spy: the real sanitize_tree on a FakeSandbox sees no candidates."""
+async def test_real_sanitizer_is_wired_in_and_does_not_disturb_the_fake_box(monkeypatch):
+    """Without the spy: the real sanitize_tree on a FakeSandbox sees no candidates. (A fake box
+    runs no python, so the protected-name discovery, tested on real processes in
+    test_sanitize_shadow.py, is stubbed.)"""
+
+    async def discovered(box):
+        return frozenset({"pluggy", "json"})
+
+    monkeypatch.setattr(sanitize, "_protected_names", discovered)
     deps = make_deps()
     res = await run(deps)
     box = deps.sandboxes.isolated_boxes[HIDDEN_CHECKS_BOX]
