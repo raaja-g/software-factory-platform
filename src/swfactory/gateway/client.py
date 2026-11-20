@@ -177,8 +177,9 @@ class GatewayClient:
                 "duration": f"{ttl_s}s",
                 "allowed_routes": ["llm_api_routes"],
                 "key_alias": f"run-{run_id}",
+                # `tags` on a key is Enterprise-only (403 on the open-source gateway): a run is
+                # attributed through its key alias and this metadata
                 "metadata": dict(tags),
-                "tags": [f"{k}:{v}" for k, v in tags.items()],
             },
         )
         return str(resp.json()["key"])
@@ -199,7 +200,14 @@ class GatewayClient:
         tomorrow = (datetime.now(UTC) + timedelta(days=1)).date().isoformat()
         try:
             resp = await self._request(
-                "GET", "/spend/logs", params={"start_date": _uuid_day(run_id), "end_date": tomorrow}
+                "GET",
+                "/spend/logs",
+                # without summarize=false the gateway returns daily summaries, not rows
+                params={
+                    "start_date": _uuid_day(run_id),
+                    "end_date": tomorrow,
+                    "summarize": "false",
+                },
             )
             rows = resp.json()
         except (httpx.HTTPError, ValueError):
@@ -207,6 +215,7 @@ class GatewayClient:
         if isinstance(rows, dict):
             rows = rows.get("data") or rows.get("logs") or []
         tag = f"run:{run_id}"
+        alias = f"run-{run_id}"
         total = Decimal(0)
         for row in rows:
             tags = row.get("request_tags") or []
@@ -215,7 +224,14 @@ class GatewayClient:
                     tags = json.loads(tags)
                 except ValueError:
                     tags = [tags]
-            if tag in tags:
+            meta = row.get("metadata")
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except ValueError:
+                    meta = None
+            by_alias = isinstance(meta, dict) and meta.get("user_api_key_alias") == alias
+            if tag in tags or by_alias:
                 total += Decimal(str(row.get("spend") or 0))
         return total
 

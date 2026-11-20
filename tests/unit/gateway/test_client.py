@@ -114,11 +114,9 @@ async def test_mint_run_key_payload(gw: GatewayClient, srv: Server):
         and body["duration"] == "1500s"
     )
     assert body["allowed_routes"] == ["llm_api_routes"]
-    assert (
-        body["key_alias"] == f"run-{RUN}"
-        and body["metadata"]["run"] == str(RUN)
-        and "role:builder" in body["tags"]
-    )
+    assert body["key_alias"] == f"run-{RUN}" and body["metadata"]["run"] == str(RUN)
+    # `tags` on a key is Enterprise-only: the open-source gateway answers 403 to it
+    assert "tags" not in body
     assert srv.sent_before("/key/delete", "/key/generate")
     assert srv.sent("/key/delete") == {"key_aliases": [f"run-{RUN}"]}
 
@@ -185,6 +183,25 @@ async def test_run_spend_sums_tagged_rows(gw: GatewayClient, srv: Server):
     )
     assert await gw.run_spend(RUN) == Decimal("0.03")
     assert srv.sent_params("/spend/logs")["start_date"] == RUN_DAY
+    assert srv.sent_params("/spend/logs")["summarize"] == "false"  # else daily summaries come back
+
+
+async def test_run_spend_matches_rows_by_key_alias(gw: GatewayClient, srv: Server):
+    # the open-source gateway cannot tag a key, so a row's run is its key alias in the row metadata
+    srv.handlers["/spend/logs"] = ok(
+        [
+            {
+                "spend": 0.01,
+                "request_tags": ["User-Agent: x"],
+                "metadata": {"user_api_key_alias": f"run-{RUN}"},
+            },
+            {"spend": 0.02, "metadata": json.dumps({"user_api_key_alias": f"run-{RUN}"})},
+            {"spend": 5, "metadata": {"user_api_key_alias": f"run-{OTHER}"}},
+            {"spend": 7, "metadata": {"user_api_key_alias": None}},
+            {"spend": 9, "metadata": "not json"},
+        ]
+    )
+    assert await gw.run_spend(RUN) == Decimal("0.03")
 
 
 async def test_run_spend_none_when_unreadable(gw: GatewayClient, srv: Server, monkeypatch):

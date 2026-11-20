@@ -124,6 +124,7 @@ def make_error_handler(
             job_id=state.get("job_id"),
             cause=type(cause).__name__,
             detail=str(cause)[:300],
+            exc_info=cause,  # the traceback shows where it came from
         )
         benchmark = state.get("kind") == "benchmark"
         # L13, L14: scoring never reaches a person; finalize runs after the outcome. A benchmark

@@ -61,6 +61,9 @@ def test_error_handler_logs_why_the_step_failed():
     assert len(failed) == 1
     assert (failed[0]["node"], failed[0]["cause"]) == ("prepare", "FileNotFoundError")
     assert "no such repo" in failed[0]["detail"] and failed[0]["job_id"] == "x"
+    assert isinstance(
+        failed[0]["exc_info"], FileNotFoundError
+    )  # rendered as a traceback by the log
 
 
 def test_error_handler_log_detail_is_truncated():

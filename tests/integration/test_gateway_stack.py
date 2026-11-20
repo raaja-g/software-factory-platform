@@ -238,3 +238,42 @@ def test_edge_follows_recreated_gateway(job_net, run_key):
             break
         time.sleep(2)
     assert status == 200
+
+
+def test_platform_client_mints_and_reads_spend_on_the_open_source_gateway(stack):
+    """The platform's own GatewayClient against a real LiteLLM container. The unit tests use a fake
+    that accepts anything; the real open-source gateway answered 403 to the `tags` field the client
+    used to send, and `/spend/logs` returns daily summaries unless asked for raw rows."""
+    import asyncio
+    from decimal import Decimal
+    from uuid import uuid4
+
+    import httpx
+
+    from swfactory.gateway.client import GatewayClient
+
+    run = uuid4()
+
+    async def go():
+        gw = GatewayClient("http://127.0.0.1:4000", MASTER)
+        try:
+            key = await gw.mint_run_key(
+                run_id=run,
+                models=["mock"],
+                max_budget_usd=Decimal("0.5"),
+                tags={"run": str(run), "role": "builder"},
+                ttl_s=300,
+            )
+            r = httpx.post(
+                "http://127.0.0.1:4000/v1/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json=MOCK_CHAT,
+                timeout=60,
+            )
+            assert r.status_code == 200, r.text
+            return key, await gw.key_spend(key)
+        finally:
+            await gw.revoke_run(run)
+
+    key, spend = asyncio.run(go())
+    assert key.startswith("sk-") and spend == Decimal(0)
