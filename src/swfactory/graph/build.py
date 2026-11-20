@@ -96,6 +96,7 @@ def initial_state(job: Job, defn: Definition) -> JobState:
         reviews={},
         decision=None,
         gate_reason=None,
+        gate_scope=None,
         retry_node=None,
         human=None,
         outcome=None,
@@ -112,14 +113,16 @@ def make_error_handler(
         cause = error.error if isinstance(error, NodeError) else error
         if isinstance(cause, LeaseLost):  # never write a gate into a thread another worker drives
             raise cause
-        if (
-            node in _NO_HANDLER_GATE and not gate_all
-        ):  # L13, L14: scoring never reaches a person; finalize runs after the outcome
+        benchmark = state.get("kind") == "benchmark"
+        # L13, L14: scoring never reaches a person; finalize runs after the outcome. A benchmark
+        # job's failed finalize goes to the gate, which ends the job failed (never an interrupt).
+        if node in _NO_HANDLER_GATE and not gate_all and not (benchmark and node == "finalize"):
             return Command(goto=END)
         update = failure_update(node)
         reason = getattr(cause, "gate_reason", None)  # BudgetExceeded, NoModelAvailable
         if isinstance(reason, str) and reason:
             update["gate_reason"] = reason
+        update["gate_scope"] = getattr(cause, "scope", None)  # BudgetExceeded.scope, else None
         return Command(goto="human_gate", update=update)
 
     handler.__name__ = f"on_error_{node}"
@@ -206,7 +209,11 @@ def build_job_graph(
     g.add_edge(START, "prepare")
     g.add_edge("triage", "spec")
     g.add_edge("review", "after_reviews")
-    g.add_edge("finalize", "score")
+    g.add_conditional_edges(
+        "finalize",
+        lambda s: END if s.get("bench_reference") else "score",
+        {END: END, "score": "score"},
+    )
     g.add_edge("score", END)
     return g.compile(checkpointer=checkpointer)
 

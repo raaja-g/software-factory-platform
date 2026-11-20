@@ -842,6 +842,111 @@ async function showMetrics() {
           : h('tr', {}, h('td', { colspan: '5', class: 'muted', text: 'No judge scores yet' }))))))));
 }
 
+/* ── benchmarks ─────────────────────────────────── */
+const SVGNS = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs, ...kids) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, String(v));
+  for (const kid of kids.flat()) if (kid) el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  return el;
+}
+function benchChart(points) {
+  const W = 480, H = 260, L = 44, R = 20, T = 14, B = 38;
+  const maxCost = Math.max(0.01, ...points.map((p) => Number(p.cost_usd)));
+  const x = (c) => L + (Number(c) / maxCost) * (W - L - R - 60);
+  const y = (q) => T + (1 - q) * (H - T - B);
+  const svg = svgEl('svg', { class: 'bench-chart', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Cost per task against quality, one point per configuration' });
+  svg.append(svgEl('line', { x1: L, y1: T, x2: L, y2: H - B, class: 'axis' }), svgEl('line', { x1: L, y1: H - B, x2: W - R, y2: H - B, class: 'axis' }));
+  for (const q of [0, 0.5, 1]) svg.append(svgEl('text', { x: L - 6, y: y(q) + 4, class: 'tick', 'text-anchor': 'end' }, q.toFixed(1)));
+  svg.append(svgEl('text', { x: L, y: H - 8, class: 'tick' }, '$0'),
+    svgEl('text', { x: (L + W - R) / 2, y: H - 8, class: 'tick', 'text-anchor': 'middle' }, `cost per task (to $${maxCost.toFixed(2)})`),
+    svgEl('text', { x: 12, y: T + 8, class: 'tick' }, 'quality'));
+  for (const p of points) {
+    const cx = x(p.cost_usd), cy = y(p.quality);
+    svg.append(svgEl('circle', { cx, cy, r: 6, class: p.pareto ? 'pt pareto' : 'pt' }, svgEl('title', {}, `${p.config}: quality ${p.quality.toFixed(2)} at $${Number(p.cost_usd).toFixed(2)} per task`)),
+      svgEl('text', { x: cx + 9, y: cy + 4, class: 'lbl' }, p.config));
+  }
+  return svg;
+}
+const f2 = (v) => (v === null || v === undefined ? '-' : Number(v).toFixed(2));
+function configRow(c) {
+  const iv = c.hidden_pass_interval;
+  const hidden = c.hidden_pass_rate === null || !iv ? '-' : `${f2(c.hidden_pass_rate)} (n=${c.completed}, ${f2(iv[0])}–${f2(iv[1])})`;
+  const unc = c.judge_pass_rate_uncalibrated;
+  return h('tr', {},
+    h('td', { text: c.name }), h('td', { text: hidden }),
+    h('td', {}, f2(c.judge_pass_rate), unc !== null && unc !== undefined && h('span', { class: 'muted', text: ` ${f2(unc)} not counted` })),
+    h('td', { text: c.mean_rounds === null ? '-' : Number(c.mean_rounds).toFixed(1) }),
+    h('td', { text: c.mean_cost_usd === null ? '-' : money(c.mean_cost_usd) }),
+    h('td', { text: c.median_duration_s === null ? '-' : `${Math.round(c.median_duration_s)}s` }),
+    h('td', { text: String(c.not_run) }));
+}
+async function showBenchRun(id) {
+  const r = await apiJson(`/api/bench/runs/${encodeURIComponent(id)}`);
+  $('#main').replaceChildren(page(`Benchmark ${r.suite}`,
+    h('p', { class: 'muted', text: `${r.status} · spent ${money(r.cost_usd)} of ${money(r.budget_usd)} · definition ${String(r.definition_sha).slice(0, 12)}` }),
+    h('p', { class: 'recommended' }, h('strong', { text: `Recommended: ${r.recommended || 'none'}` }), h('span', { class: 'muted', text: ` ${r.recommendation_reason}` })),
+    r.chart.length ? benchChart(r.chart) : h('p', { class: 'muted', text: 'No completed trials to chart yet.' }),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'data bench-table' },
+      h('thead', {}, h('tr', {}, ['Configuration', 'Hidden pass', 'Judge pass (not ranked)', 'Rounds', 'Cost per task', 'Time', 'Not run'].map((c) => h('th', { text: c })))),
+      h('tbody', {}, r.configs.map(configRow)))),
+    r.invalid_tasks.length > 0 && h('div', { class: 'metric-block' }, h('h3', { text: 'Invalid tasks' }),
+      h('ul', {}, r.invalid_tasks.map((t) => h('li', { text: r.invalid_reasons?.[t] ? `${t}: ${r.invalid_reasons[t]}` : t })))),
+    h('p', {}, h('a', { href: '#/benchmarks', text: 'All benchmarks' }))));
+}
+function benchStartForm(suites) {
+  const sel = h('select', { id: 'bench-suite', 'aria-label': 'Suite' }, h('option', { value: '', text: 'Choose a suite' }), suites.map((su) => h('option', { value: su.name, text: su.name })));
+  const reps = h('input', { id: 'bench-reps', type: 'number', min: '1', value: '1', 'aria-label': 'Repetitions' });
+  const out = h('p', { class: 'status-line', id: 'bench-estimate' });
+  const go = h('button', { class: 'btn primary', type: 'button', disabled: true, text: 'Start benchmark run' });
+  const json = (body) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const repetitions = () => Math.max(1, Number(reps.value) || 1);
+  let est = null, seq = 0;
+  const refresh = async () => {
+    est = null; go.disabled = true; out.className = 'status-line';
+    if (!sel.value) { out.textContent = ''; return; }
+    const mine = ++seq;
+    out.textContent = 'Estimating…';
+    try {
+      const e = await apiJson('/api/bench/estimate', json({ suite: sel.value, repetitions: repetitions() }));
+      if (mine !== seq) return;
+      est = e;
+      out.textContent = `Estimated ${money(e.estimate_usd)} (up to ${money(e.max_usd)})` + (e.budget_usd ? ` · budget cap ${money(e.budget_usd)}` : ' · no budget cap') + ` · ${e.trials} trials`;
+      go.disabled = false;
+    } catch (err) { if (mine === seq) { out.className = 'status-line err'; out.textContent = err.message; } }
+  };
+  sel.addEventListener('change', refresh);
+  reps.addEventListener('change', refresh);
+  go.addEventListener('click', async () => {
+    if (!est) return;
+    go.disabled = true;
+    try {
+      const res = await apiJson('/api/bench/runs', json({ suite: sel.value, repetitions: repetitions(), accept_estimate_usd: est.estimate_usd }));
+      location.hash = `#/benchmarks/${encodeURIComponent(res.run_id)}`;
+    } catch (err) { await refresh(); out.className = 'status-line err'; out.textContent = err.message; }
+  });
+  return h('div', { class: 'metric-block bench-start' }, h('h3', { text: 'Start a run' }), h('div', { class: 'filters' }, field('Suite', sel), field('Repetitions', reps)), out, go);
+}
+async function showBenchmarks() {
+  const id = decodeURIComponent((location.hash.slice(1).split('/').filter(Boolean)[1] || '').split('?')[0]);
+  if (id) return showBenchRun(id);
+  const [suites, runs] = await Promise.all([apiJson('/api/bench/suites'), apiJson('/api/bench/runs')]);
+  const kids = [h('div', { class: 'metric-block' }, h('h3', { text: 'Suites' }),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
+      h('thead', {}, h('tr', {}, ['Suite', 'Tasks', 'Configurations', 'Budget'].map((c) => h('th', { text: c })))),
+      h('tbody', {}, suites.length ? suites.map((su) => h('tr', {}, h('td', { text: su.name }), h('td', { text: String(su.tasks) }),
+        h('td', { text: su.configurations.join(', ') }), h('td', { text: money(su.budget_usd) })))
+        : h('tr', {}, h('td', { colspan: '4', class: 'muted', text: 'No benchmark suites yet' }))))))];
+  if (can('admin') && suites.length) kids.push(benchStartForm(suites));
+  kids.push(h('div', { class: 'metric-block' }, h('h3', { text: 'Runs' }),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
+      h('thead', {}, h('tr', {}, ['Run', 'Suite', 'Status', 'Spend'].map((c) => h('th', { text: c })))),
+      h('tbody', {}, runs.length ? runs.map((r) => h('tr', {}, h('td', {}, h('a', { href: `#/benchmarks/${encodeURIComponent(r.id)}`, text: String(r.id).slice(0, 8) })),
+        h('td', { text: r.suite }), h('td', { text: r.status }), h('td', { text: `${money(r.cost_usd)} of ${r.budget_usd ? money(r.budget_usd) : 'no cap'}` })))
+        : h('tr', {}, h('td', { colspan: '4', class: 'muted', text: 'No benchmark runs yet' })))))));
+  $('#main').replaceChildren(page('Benchmarks', ...kids));
+}
+
 /* ── backlogs ───────────────────────────────────── */
 const backlogView = { ref: null, reload: null, jobRefs: new Set(), timer: null };
 function backlogEvent(kind, e) {
@@ -939,7 +1044,7 @@ async function showBacklog() {
 }
 
 /* ── routing ────────────────────────────────────── */
-const VIEWS = { backlogs: showBacklogs, backlog: showBacklog, new: showNew, run: showRun, apps: showApps, models: showModels, profiles: showProfiles, definition: showDefinition, metrics: showMetrics };
+const VIEWS = { backlogs: showBacklogs, backlog: showBacklog, new: showNew, run: showRun, apps: showApps, models: showModels, profiles: showProfiles, definition: showDefinition, metrics: showMetrics, benchmarks: showBenchmarks };
 async function route() {
   let hash = '';
   try { hash = decodeURIComponent(location.hash.slice(1)); } catch { /* malformed hash */ }

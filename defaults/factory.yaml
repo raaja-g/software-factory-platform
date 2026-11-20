@@ -55,6 +55,13 @@ apps:
     repo_url: demo
     profile: team-gemini
     test_command: "uv run pytest"
+  v1-parity:                             # the benchmark suite's repo; run `factory bench seed v1-parity`
+    repo_kind: local
+    repo_url: v1-parity
+    runner: web
+    test_command: "make test"
+    merge_policy: local_merge
+    profile: team-gemini
 
 triage:
   mode: rules

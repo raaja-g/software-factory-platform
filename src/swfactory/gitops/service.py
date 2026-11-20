@@ -29,7 +29,9 @@ class Delivery:
 
 
 class GitService:
-    async def prepare(self, job: Job, app: AppDef, box: Sandbox) -> str:
+    async def prepare(
+        self, job: Job, app: AppDef, box: Sandbox, *, merge_sha: str | None = None
+    ) -> str:
         raise NotImplementedError
 
     async def rebase(self, job: Job, app: AppDef, box: Sandbox) -> bool:
@@ -103,8 +105,12 @@ class GitDispatcher(GitService):
         except KeyError:
             raise ValueError(f"no git service for repo kind {app.repo_kind!r}") from None
 
-    async def prepare(self, job: Job, app: AppDef, box: Sandbox) -> str:
-        return await self._for(app).prepare(job, app, box)
+    async def prepare(
+        self, job: Job, app: AppDef, box: Sandbox, *, merge_sha: str | None = None
+    ) -> str:
+        if merge_sha is None:
+            return await self._for(app).prepare(job, app, box)
+        return await self._for(app).prepare(job, app, box, merge_sha=merge_sha)
 
     async def rebase(self, job: Job, app: AppDef, box: Sandbox) -> bool:
         return await self._for(app).rebase(job, app, box)

@@ -370,3 +370,28 @@ def test_sidecar_holds_the_broker_token_but_not_the_app_key():
     assert "broker_token" in a["secrets"] and "github_app_key" not in a["secrets"]
     assert "core-net" in a["networks"] and "mirror-net" in a["networks"]
     assert a["environment"]["FACTORY_BROKER_URL"] == "http://orchestrator:8091"
+
+
+def test_orchestrator_can_write_to_its_named_volumes():
+    """A named volume copies the image directory's owner on first use. The orchestrator runs as uid
+    10001, so each writable named-volume target must exist in the image and be chowned to it, or
+    the process cannot write there (the benchmark seed failed this way on a root-owned /repos)."""
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    compose = yaml.safe_load(Path("compose.yaml").read_text())
+    docker = Path("docker/platform.Dockerfile").read_text()
+    chown = re.search(r"chown 10001:10001 ([^\\\n&]+)", docker)
+    assert chown, "the Dockerfile must chown the volume targets to 10001"
+    owned = set(chown.group(1).split())
+    writable = []
+    for mount in compose["services"]["orchestrator"]["volumes"]:
+        if not isinstance(mount, str):
+            continue
+        src, _, rest = mount.partition(":")
+        dst, _, mode = rest.partition(":")
+        if src in compose.get("volumes", {}) and mode != "ro":
+            writable.append(dst)
+    assert writable and set(writable) - owned == set(), (writable, owned)

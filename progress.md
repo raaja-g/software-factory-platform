@@ -4,7 +4,7 @@ Updated after every completed step.
 
 ## Now
 
-M10 part A is done; starting part B (benchmarks). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
+M10 is done (scoring and benchmarks); starting M11 (Laya). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
 
 ## Plan revision (before coding)
 
@@ -137,7 +137,12 @@ Part A, scoring and metrics (done)
 - [x] **2026-11-20** Found by live checking and fixed: `GET /scores` defined twice (the second shadowed the first and broke `factory jobs show`; judge view is now `/judges`, plus a test that no two routes share a method and path); hardcoded migration revisions in tests; the nightly test left a row that made reruns fail
 - [ ] **Needs you:** a real builder run (model access) to see judges run live; existing definition repos need the starter scorers copied in (see README)
 
-Part B, benchmarks (M10.7 to M10.15): not started
+Part B, benchmarks (done)
+
+- [x] **2026-11-20** M10.7 benchmark definitions and check files; M10.8 `factory bench add`; M10.9 estimate and run start; M10.10 tick and budget cap; M10.11 benchmark jobs, hidden checks and trial recording; M10.12 git prepare at the base commit; M10.12b reference checks; M10.13 configuration overrides, run budget scope, routes and CLI; M10.14 report and Benchmarks page; M10.15 the v1-parity suite
+- [x] **2026-11-20** Checked by me: 1380 default tests; database tests (91 benchmark files twice, 145 graph, full integration and unit chunk, 15 crash-resume, 12 loop); 29 Docker tests; 47 UI tests; ruff and pyright clean. Live stack at `m10_05_bench_task_checks`; `factory bench list` and `estimate v1-parity` (12 trials, $120.48, as the plan says) work
+- [x] **2026-11-20** Found by live checking and fixed: the orchestrator could not write to `/repos` (the image never created it for user 10001), so `factory bench seed` and any new local repo failed; now chowned in the image, with a test; `bench seed` output matches the plan; three database tests did not expect the new default app
+- [ ] **Needs you:** a real benchmark run (model access, up to $120 for the full suite) and a real merged job for `factory bench add`; existing definition repos need `benchmarks/` and the `v1-parity` app copied from `defaults/`
 
 ## M8 GitHub and automations (done)
 

@@ -2,7 +2,7 @@
 
 A platform that turns a requirement into reviewed, merged code. For each feature it runs spec, build, verify, four independent reviews, approve and deliver, using coding agents on any model provider. It runs on your machine in Docker, many apps and features at a time.
 
-**Status: under construction.** Milestones M1 to M8 and the scoring half of M10 are built: foundation, the job loop, roles and contracts, sandboxes with the verify gate and local git, the model gateway with cost control, the coding-agent adapters, the API, dashboard and CLI with a one-command local release, GitHub, and now scoring and a Metrics page. Still to come: benchmarks (the second half of M10), Laya routing (M11) and the improver (M12). See [progress.md](progress.md).
+**Status: under construction.** Milestones M1 to M8 and M10 are built: foundation, the job loop, roles and contracts, sandboxes with the verify gate and local git, the model gateway with cost control, the coding-agent adapters, the API, dashboard and CLI with a one-command local release, GitHub, scoring with a Metrics page, and now benchmarks. Still to come: Laya routing (M11) and the improver (M12). See [progress.md](progress.md).
 
 ## What works now (M1 to M8)
 
@@ -66,6 +66,14 @@ Not verified live: the acceptance replay of v1's four features with real models 
   - **Metrics page** (`#/metrics`): pass rate by role, model, engine and profile, rounds per job, escalation rate, cost per merged job, fallback rate, and each scorer's pass rate.
 
 Not verified live: the judges have never run against a real model, because no real builder run has succeeded yet. They are tested with fakes, and the live stack was checked up to the point where a model is needed.
+
+- **Benchmarks (M10, part B).** A benchmark suite replays real tasks, each pinned to the commit before the work was done, against different configurations (models, profiles, triage modes), so you can compare them on cost and quality. Quality is a hidden check the agent never sees: a test file that must pass on the result. Judges are shown next to it but never rank anything until calibrated.
+  - **Your own suites.** `factory bench add --from-job demo:003 --suite mine` turns a merged job into a task: the base commit, the acceptance items as success criteria, and the tests the job added as hidden checks (committed to your definition repo under `benchmarks/mine/`). A reference run checks that the hidden checks fail on the base commit and pass on the real merge, so a broken check is marked invalid instead of counting against a model.
+  - **The shipped suite.** `v1-parity` replays the four jobs of the first version of the factory against three configurations. Import its repo with `docker compose exec orchestrator factory bench seed v1-parity`, then `factory bench estimate v1-parity` (12 trials, up to $120.48, against a $40 suite cap) and `factory bench run v1-parity --config gemini --yes`.
+  - **Safe by design.** Every run has its own budget cap, checked before each trial starts; trials run one at a time on `bench/<run>/<task>/<config>` branches and never touch your main branch; a run that hits its cap stops with `stopped_budget` and still reports the trials it finished.
+  - **Reports.** `factory bench report RUN` shows, per configuration, the hidden-check pass rate (with a 95% interval), rounds, cost and time, and a recommendation. The Benchmarks page (`#/benchmarks`) lists runs, plots cost against quality and starts a run only after showing the estimate.
+
+Not verified live (M10 part B): no benchmark has run against a real model. The estimate, seeding and the page were checked on the live stack, and the trials themselves are tested with fakes.
 
 Not verified live (M8): none of M8 has run against real GitHub. It is tested against a fake GitHub and local git repos; the GitHub App setup in your org (spike S11 in the plan) and a real PR round trip are still to do.
 
@@ -132,4 +140,4 @@ uv run pytest -m docker                         # builds and uses real container
 
 ## Next
 
-M10: scoring every job (objective checks and calibrated LLM judges) and replaying your past jobs as benchmarks that compare models on cost and quality. Then Laya model routing with your synthetic data (M11) and the improver (M12). After that, the live pass: real models, the GitHub App and your registries.
+M11: Laya, an optional router that learns from your outcomes and your synthetic rows (import with `factory laya import`), runs in shadow mode first, and takes over a question only after a benchmark proves equal quality at lower cost. Then the improver (M12). After that, the live pass: real models, the GitHub App and your registries.

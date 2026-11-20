@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
+from langgraph.graph import END
 from langgraph.types import Command, interrupt
 from sqlalchemy import func, select
 
@@ -9,7 +11,7 @@ from swfactory.db.tables import JobEvent
 from swfactory.domain.types import HumanAction, Stage
 from swfactory.events import record_event
 from swfactory.graph.deps import Deps
-from swfactory.graph.nodes import job_uuid, merged
+from swfactory.graph.nodes import enter_stage, job_uuid, merged
 from swfactory.graph.routing import (
     gate_artifacts,
     route_after_human,
@@ -64,7 +66,28 @@ def make(deps: Deps):
             update.update(round=new.get("round", 1) + 1, retry_node=None)
         return update
 
+    async def _benchmark_gate(state: JobState) -> Command:
+        """A benchmark job never waits for a person: it closes, or fails when finalize failed."""
+        job_id = job_uuid(state)
+        reason = state.get("gate_reason")
+        async with deps.sessions.begin() as s:
+            await record_event(
+                s, job_id, "bench.gate", {"reason": reason, "scope": state.get("gate_scope")}
+            )
+        if state.get("retry_node") == "finalize":  # never loop back into the failing finalize
+            await enter_stage(
+                deps,
+                job_id,
+                Stage.FAILED,
+                error=reason or "step failed: finalize",
+                finished_at=datetime.now(UTC),
+            )
+            return Command(goto=END)
+        return Command(goto="finalize", update={"outcome": Stage.CLOSED.value})
+
     async def human_gate(state: JobState) -> Command:
+        if state.get("kind") == "benchmark":
+            return await _benchmark_gate(state)
         is_req = state.get("kind") == "requirements"
         shown = None if is_req else await job_head(deps, job_uuid(state))
         value = interrupt(

@@ -103,7 +103,7 @@ async def test_valid_load_becomes_active(sessions, tmp_path):
     ok = ok_result(tmp_path)
     assert await store.save(ok) is True and (await store.active())[0] == ok.sha
     assert await events(sessions, "definition.loaded") == [
-        {"sha": ok.sha, "source": ok.source, "apps": {"demo": "added"}}
+        {"sha": ok.sha, "source": ok.source, "apps": {"demo": "added", "v1-parity": "added"}}
     ]
     assert await store.get(ok.sha) is not None and await store.get("nope") is None
 
@@ -130,13 +130,13 @@ async def test_sync_apps_anchors_ids(sessions, tmp_path):
     gone, back = without_demo(ok).definition, with_demo(ok).definition
     assert gone and back
     async with sessions() as s, s.begin():
-        assert await store.sync_apps(s, ok.definition) == {"demo": "added"}
+        assert (await store.sync_apps(s, ok.definition))["demo"] == "added"
         app_id = await s.scalar(select(App.id).where(App.slug == "demo"))
-        assert await store.sync_apps(s, gone) == {"demo": "archived"}
-        assert await store.sync_apps(s, back) == {"demo": "updated"}
+        assert (await store.sync_apps(s, gone))["demo"] == "archived"
+        assert (await store.sync_apps(s, back))["demo"] == "updated"
         a = await s.scalar(select(App).where(App.slug == "demo"))
         assert (a.id, a.archived_at) == (app_id, None)
-        assert await store.sync_apps(s, ok.definition) == {"demo": "unchanged"}
+        assert (await store.sync_apps(s, ok.definition))["demo"] == "unchanged"
 
 
 async def test_archiving_an_app_stops_its_jobs(sessions, tmp_path):
@@ -162,6 +162,8 @@ def test_cli_def_sync_and_apps_list(pg_url, sessions, tmp_path, monkeypatch, api
     sha = init_definition_repo(tmp_path / "d")
     r = CliRunner().invoke(app, ["def", "sync", str(tmp_path / "d")])
     assert r.exit_code == 0, r.output
-    assert r.stdout.strip() == f"active definition {sha[:12]}; apps: demo (added)"
+    assert (
+        r.stdout.strip() == f"active definition {sha[:12]}; apps: demo (added), v1-parity (added)"
+    )
     rows = CliRunner().invoke(app, ["apps", "list"]).stdout.splitlines()
-    assert [ln.split() for ln in rows] == [["demo", "local", "local_merge", "team-gemini"]]
+    assert ["demo", "local", "local_merge", "team-gemini"] in [ln.split() for ln in rows]

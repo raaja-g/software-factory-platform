@@ -41,7 +41,16 @@ USER_ROLES = ("viewer", "submitter", "approver", "admin")
 ARTIFACT_KINDS = ("md", "log", "transcript", "image", "json")
 REPO_KINDS = ("github", "local")
 DECISION_PURPOSES = ("model", "triage")
-BENCH_STATUSES = ("pending", "running", "done", "failed", "cancelled")
+BENCH_STATUSES = ("running", "done", "stopped_budget", "cancelled")
+BENCH_RESULT_STATUSES = (
+    "pending",
+    "running",
+    "done",
+    "skipped_budget",
+    "budget_stopped",
+    "skipped_invalid",
+)
+BENCH_CHECK_STATUSES = ("pending", "running", "valid", "invalid")
 
 
 class XID8(UserDefinedType[Any]):
@@ -365,8 +374,12 @@ class BenchRun(Base):
     suite: Mapped[str] = mapped_column(Text)
     configurations: Mapped[Any] = _jsonb("[]", nullable=False)
     definition_sha: Mapped[str | None] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(Text, server_default="pending")
+    status: Mapped[str] = mapped_column(Text, server_default="running")
     budget_usd: Mapped[Decimal | None] = _money()
+    estimate_usd: Mapped[Decimal | None] = _money()
+    repetitions: Mapped[int] = mapped_column(Integer, server_default=text("1"))
+    max_parallel: Mapped[int] = mapped_column(Integer, server_default=text("1"))
+    requested_by: Mapped[str | None] = mapped_column(Text)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), server_default=text("0"))
     created_at: Mapped[datetime] = _ts()
     finished_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
@@ -385,6 +398,31 @@ class BenchResult(Base):
     rounds: Mapped[int | None] = mapped_column(Integer)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), server_default=text("0"))
     duration_s: Mapped[Decimal | None] = mapped_column(Numeric)
+    repetition: Mapped[int] = mapped_column(Integer, server_default=text("1"))
+    status: Mapped[str] = mapped_column(Text, server_default="pending")
+    overrides: Mapped[Any] = _jsonb()
+    hidden_detail: Mapped[str | None] = mapped_column(Text)
+    judge_pass_uncalibrated: Mapped[bool | None] = mapped_column(Boolean)
+    __table_args__ = (
+        _check("bench_results", "status", BENCH_RESULT_STATUSES),
+        UniqueConstraint(
+            "run_id", "task", "configuration", "repetition", name="bench_results_trial_key"
+        ),
+        UniqueConstraint("job_id", name="bench_results_job_id_key"),
+    )
+
+
+class BenchTaskCheck(Base):
+    __tablename__ = "bench_task_checks"
+    check_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    suite: Mapped[str] = mapped_column(Text)
+    task: Mapped[str] = mapped_column(Text)
+    job_id: Mapped[uuid.UUID | None] = _fk("app.jobs.id")
+    status: Mapped[str] = mapped_column(Text, server_default="pending")
+    detail: Mapped[Any] = _jsonb("{}", nullable=False)
+    created_at: Mapped[datetime] = _ts()
+    finished_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
+    __table_args__ = (_check("bench_task_checks", "status", BENCH_CHECK_STATUSES),)
 
 
 class Improvement(Base):

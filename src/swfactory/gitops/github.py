@@ -28,7 +28,7 @@ from swfactory.domain.types import Decision
 from swfactory.github.auth import PERMS_FETCH, PERMS_PUSH, GitHubAuth
 from swfactory.github.checks import CHECK_NAME, PrBodyContext, render_pr_body, review_check
 from swfactory.github.client import GitHubClient, GitHubError, MutationQueue, PullRef
-from swfactory.gitops.local import GitError, sandbox_diff_stat
+from swfactory.gitops.local import GitError, is_bench_job, sandbox_diff_stat
 from swfactory.gitops.service import (
     REASON_HEAD_MISMATCH,
     REASON_NOTHING_TO_DELIVER,
@@ -114,6 +114,7 @@ def git_argv(
     branch: str | None = None,
     expect_sha: str | None = None,
     since: str | None = None,
+    sha: str | None = None,
     remote_base: str = "https://github.com",
 ) -> list[str]:
     host = remote_base.split("://", 1)[-1].split("/", 1)[0]
@@ -124,6 +125,8 @@ def git_argv(
     if branch is None:
         raise ValueError(f"{op} needs a branch")
     ref = f"refs/heads/{branch}"
+    if op == "fetch" and sha is not None:
+        return [*base, "-C", GITOPS_REPO, "fetch", url, "--depth=1", sha]
     if op == "fetch":
         return [*base, "-C", GITOPS_REPO, "fetch", "--prune", url, f"+{ref}:{ref}"]
     if op == "push":
@@ -386,6 +389,7 @@ GIT_DIR = "/work/.factory/git"
 BASE_BUNDLE = f"{GIT_DIR}/base.bundle"
 KEPT_BUNDLE = f"{GIT_DIR}/kept.bundle"
 JOB_BUNDLE = f"{GIT_DIR}/job.bundle"
+MERGE_BUNDLE = f"{GIT_DIR}/merge.bundle"
 LABEL_NEEDS_HUMAN = "factory:needs-human"
 FALLBACK_IDENTITY = ("factory-bot", "factory-bot@users.noreply.github.com")
 REASON_BRANCH_CHANGED = "branch changed on GitHub"
@@ -504,6 +508,22 @@ class GitHubGit(GitService):
             raise GitError(f"cannot read {default} after the fetch")
         return sha
 
+    async def _fetch_base(self, job: Job, app: AppDef) -> str:
+        """Benchmark: fetch only the pinned base commit, depth 1, and point the default at it."""
+        default = app.default_branch
+        sha = job.base_sha or ""
+        r = await self._git_op(job, "init", app, branch=default)
+        if r.exit_code != 0:
+            raise GitError(f"git init failed: {r.stderr.strip()}")
+        token = await self.auth.token_for(repo_of(app), PERMS_FETCH)
+        r = await self._git_op(job, "fetch", app, branch=default, token=token, sha=sha)
+        if r.exit_code != 0:
+            raise GitError(f"cannot fetch {sha}: {r.stderr.strip()}")
+        r = await self._gitops_git(job, "update-ref", f"refs/heads/{default}", sha)
+        if r.exit_code != 0:
+            raise GitError(f"cannot point {default} at {sha}: {r.stderr.strip()}")
+        return sha
+
     async def _export(
         self, job: Job, app: AppDef, box: Sandbox, ref_branch: str, dest: str, *, since: str | None
     ) -> None:
@@ -554,14 +574,59 @@ class GitHubGit(GitService):
     def _lock(self, job: Job) -> asyncio.Lock:
         return self._locks.setdefault(str(job.id), asyncio.Lock())
 
-    async def prepare(self, job: Job, app: AppDef, box: Sandbox) -> str:
+    async def prepare(
+        self, job: Job, app: AppDef, box: Sandbox, *, merge_sha: str | None = None
+    ) -> str:
         async with self._lock(job):
-            return await self._prepare(job, app, box)
+            return await self._prepare(job, app, box, merge_sha)
 
-    async def _prepare(self, job: Job, app: AppDef, box: Sandbox) -> str:
+    async def _reference_commit(
+        self, job: Job, app: AppDef, box: Sandbox, merge_sha: str, base: str
+    ) -> None:
+        """Fetch the merge commit at depth 1; HEAD's tree becomes the merged tree over the base."""
         default = app.default_branch
-        branch = _branch(job)
+        token = await self.auth.token_for(repo_of(app), PERMS_FETCH)
+        r = await self._git_op(job, "fetch", app, branch=default, token=token, sha=merge_sha)
+        if r.exit_code != 0:
+            raise GitError(f"cannot fetch {merge_sha}: {r.stderr.strip()}")
+        ref = "refs/heads/factory-reference"
+        r = await self._gitops_git(job, "update-ref", ref, merge_sha)
+        if r.exit_code != 0:
+            raise GitError(f"cannot point the reference at {merge_sha}: {r.stderr.strip()}")
+        await self._export(job, app, box, "factory-reference", MERGE_BUNDLE, since=None)
+        task = job.title.removeprefix("check ")
+        for args in (
+            ("fetch", "-q", MERGE_BUNDLE, "+refs/heads/factory-reference:refs/factory/merge"),
+            ("read-tree", "-u", "--reset", merge_sha),
+            ("commit", "-q", "--allow-empty", "-m", f"reference: {task}"),
+        ):
+            r = await _box(box, *args)
+            if r.exit_code != 0:
+                raise GitError(f"reference {args[0]} failed: {r.stderr.strip()}")
+
+    async def _prepare(
+        self, job: Job, app: AppDef, box: Sandbox, merge_sha: str | None = None
+    ) -> str:
+        default = app.default_branch
+        bench = is_bench_job(job)
+        branch = job.branch if bench and job.branch else _branch(job)
         has_repo = (await box.read_bytes(f"{REPO}/.git/HEAD")) is not None
+        if bench:
+            if not has_repo:
+                await self._fetch_base(job, app)
+                await self._export(job, app, box, default, BASE_BUNDLE, since=None)
+                r = await _box(box, "clone", "--branch", default, BASE_BUNDLE, REPO, cwd="/work")
+                if r.exit_code != 0:
+                    raise GitError(f"clone failed: {r.stderr.strip()}")
+            name, email = await self._bot_identity(app)
+            await _box(box, "config", "user.name", name)
+            await _box(box, "config", "user.email", email)
+            r = await _box(box, "switch", "-C", branch, f"origin/{default}")
+            if r.exit_code != 0:
+                raise GitError(f"switch failed: {r.stderr.strip()}")
+            if merge_sha:
+                await self._reference_commit(job, app, box, merge_sha, job.base_sha or "")
+            return job.base_sha or ""
         if not has_repo:
             await self._fetch_default(job, app)
             async with self.sessions() as s:
@@ -638,6 +703,8 @@ class GitHubGit(GitService):
         return True
 
     async def rebase(self, job: Job, app: AppDef, box: Sandbox) -> bool:
+        if is_bench_job(job):
+            return True
         async with self._lock(job):
             default = app.default_branch
             target = await self._fetch_default(job, app)
@@ -794,6 +861,8 @@ class GitHubGit(GitService):
     async def deliver(
         self, job: Job, app: AppDef, box: Sandbox, *, draft: bool, expected_head: str
     ) -> Delivery:
+        if is_bench_job(job):
+            raise GitError("a benchmark job is never delivered")
         async with self._lock(job):
             try:
                 return await self._deliver(job, app, box, draft=draft, expected_head=expected_head)

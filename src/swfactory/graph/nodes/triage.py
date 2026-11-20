@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from swfactory.domain.types import Stage
+from swfactory.domain.types import Stage, TriageMode
 from swfactory.graph.deps import Deps
 from swfactory.graph.nodes import enter_stage, job_uuid
 from swfactory.graph.state import JobState
-from swfactory.graph.steps import pinned_definition
+from swfactory.graph.steps import benchmark_overrides, pinned_definition
 from swfactory.models.triage import triage_to_json
 
 
@@ -12,7 +12,9 @@ def make(deps: Deps):
     async def triage(state: JobState) -> dict:
         job_id = job_uuid(state)
         job, defn, app = await pinned_definition(deps, job_id)
-        result = await deps.triage.triage(job, app)
+        ov = await benchmark_overrides(deps, job)
+        modes = {q: TriageMode(m) for q, m in (ov or {}).get("triage_modes", {}).items()} or None
+        result = await deps.triage.triage(job, app, modes=modes)
         fields: dict = {
             "triage": {
                 **(job.triage if isinstance(job.triage, dict) else {}),

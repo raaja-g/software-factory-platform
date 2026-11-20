@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from swfactory.definition.models import MergePolicy
+from swfactory.domain.types import JobKind
 from swfactory.gitops.folder import FolderError, FolderRepo
 from swfactory.gitops.service import (
     REASON_FOLDER_MOVED,
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
 GIT_DIR = "/work/.factory/git"
 BASE_BUNDLE = f"{GIT_DIR}/base.bundle"
 JOB_BUNDLE = f"{GIT_DIR}/job.bundle"
+MERGE_BUNDLE = f"{GIT_DIR}/merge.bundle"
 IDENTITY = {
     "GIT_AUTHOR_NAME": "factory-bot",
     "GIT_AUTHOR_EMAIL": "factory-bot@localhost",
@@ -45,6 +47,11 @@ IDENTITY = {
 
 
 class GitError(RuntimeError): ...
+
+
+def is_bench_job(job: Job) -> bool:
+    """A benchmark job works on a preset branch at a pinned base commit and never delivers."""
+    return job.kind == JobKind.BENCHMARK.value and bool(job.base_sha)
 
 
 async def _box_git(box: Sandbox, *args: str, cwd: str = REPO):  # noqa: ANN202
@@ -185,16 +192,98 @@ class LocalGit(GitService):
         default = await self.folders.default_branch(app)
         return app.model_copy(update={"default_branch": default})
 
-    async def prepare(self, job: Job, app: AppDef, box: Sandbox) -> str:
+    async def prepare(
+        self, job: Job, app: AppDef, box: Sandbox, *, merge_sha: str | None = None
+    ) -> str:
         async with self._lock(app):
             if app.local_path is not None:
                 if self.folders is None:
                     raise FolderError("FACTORY_HOST_REPOS_ROOT is not set")
                 await self.folders.ensure_bare(app)
                 app = await self._folder_sync(app)
-            return await self._prepare(job, app, box)
+            return await self._prepare(job, app, box, merge_sha=merge_sha)
 
-    async def _prepare(self, job: Job, app: AppDef, box: Sandbox) -> str:
+    async def _reference_commit(
+        self, job: Job, app: AppDef, box: Sandbox, merge_sha: str, base: str
+    ) -> None:
+        """Make HEAD's tree the merged tree, one commit on top of the base."""
+        bare = self._bare(app)
+        tmp_ref = f"refs/factory/bench-merge/{job.id}"
+        await _ok(["update-ref", tmp_ref, merge_sha], bare)
+        spool = self._spool()
+        try:
+            rc, _, err = await _run(
+                ["bundle", "create", str(spool / "merge.bundle"), tmp_ref, f"^{base}"], bare
+            )
+            if rc != 0:
+                raise GitError(f"cannot bundle {merge_sha}: {err.strip()}")
+            await box.exec(["mkdir", "-p", GIT_DIR], cwd="/work")
+            await box.copy_in(spool / "merge.bundle", MERGE_BUNDLE)
+        finally:
+            shutil.rmtree(spool, ignore_errors=True)
+            await _run(["update-ref", "-d", tmp_ref], bare)
+        task = job.title.removeprefix("check ")
+        for args in (
+            ("fetch", "-q", MERGE_BUNDLE, f"+{tmp_ref}:refs/factory/merge"),
+            ("read-tree", "-u", "--reset", merge_sha),
+            ("commit", "-q", "--allow-empty", "-m", f"reference: {task}"),
+        ):
+            r = await self._box_git(box, *args)
+            if r.exit_code != 0:
+                raise GitError(f"reference {args[0]} failed: {r.stderr.strip()}")
+
+    async def _prepare_bench(
+        self, job: Job, app: AppDef, box: Sandbox, merge_sha: str | None = None
+    ) -> str:
+        """Only the base commit (and its history) goes in; the branch is the preset one."""
+        bare = self._bare(app)
+        default = app.default_branch
+        base = job.base_sha or ""
+        branch = job.branch or branch_name(job.seq, job.slug)
+        if (await box.read_bytes(f"{REPO}/.git/HEAD")) is None:
+            tmp_ref = f"refs/factory/bench/{job.id}"
+            await _ok(["update-ref", tmp_ref, base], bare)
+            spool = self._spool()
+            try:
+                rc, _, err = await _run(
+                    ["bundle", "create", str(spool / "base.bundle"), tmp_ref], bare
+                )
+                if rc != 0:
+                    raise GitError(f"cannot bundle {base}: {err.strip()}")
+                await box.exec(["mkdir", "-p", GIT_DIR], cwd="/work")
+                await box.copy_in(spool / "base.bundle", BASE_BUNDLE)
+            finally:
+                shutil.rmtree(spool, ignore_errors=True)
+                await _run(["update-ref", "-d", tmp_ref], bare)
+            for args in (
+                ("init", "-q", REPO),
+                (
+                    "-C",
+                    REPO,
+                    "fetch",
+                    "-q",
+                    BASE_BUNDLE,
+                    f"+{tmp_ref}:refs/remotes/origin/{default}",
+                ),
+            ):
+                r = await self._box_git(box, *args, cwd="/work")
+                if r.exit_code != 0:
+                    raise GitError(f"benchmark prepare failed: {r.stderr.strip()}")
+        await _ok(["update-ref", f"refs/factory/base/{job.id}", base], bare)
+        for key, val in (("user.name", "factory-bot"), ("user.email", "factory-bot@localhost")):
+            await self._box_git(box, "config", key, val)
+        r = await self._box_git(box, "switch", "-C", branch, f"origin/{default}")
+        if r.exit_code != 0:
+            raise GitError(f"switch failed: {r.stderr.strip()}")
+        if merge_sha:
+            await self._reference_commit(job, app, box, merge_sha, base)
+        return base
+
+    async def _prepare(
+        self, job: Job, app: AppDef, box: Sandbox, merge_sha: str | None = None
+    ) -> str:
+        if is_bench_job(job):
+            return await self._prepare_bench(job, app, box, merge_sha)
         bare = self._bare(app)
         default = app.default_branch
         branch = branch_name(job.seq, job.slug)
@@ -246,6 +335,8 @@ class LocalGit(GitService):
             return await self._rebase(job, app, box)
 
     async def _rebase(self, job: Job, app: AppDef, box: Sandbox) -> bool:
+        if is_bench_job(job):
+            return True
         bare = self._bare(app)
         default = app.default_branch
         current = (await self._box_git(box, "rev-parse", f"origin/{default}")).stdout.strip()
@@ -326,6 +417,8 @@ class LocalGit(GitService):
     async def deliver(
         self, job: Job, app: AppDef, box: Sandbox, *, draft: bool, expected_head: str
     ) -> Delivery:
+        if is_bench_job(job):
+            raise GitError("a benchmark job is never delivered")
         if app.merge_policy != MergePolicy.LOCAL_MERGE:
             return Delivery(
                 "failed",

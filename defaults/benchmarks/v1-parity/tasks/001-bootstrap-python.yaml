@@ -1,0 +1,30 @@
+title: Bootstrap a Python project
+feature: 'Bootstrap a minimal Python 3 project: `src/app/` package, pytest setup,
+  a `make test` target, and a README explaining how to run tests'
+success_criteria:
+- AC1 — `src/app/__init__.py` exists and `app` is importable in tests; `app.__version__`
+  is a non-empty string.
+- AC2 — `cd src && python3 -m app` exits 0 and prints `app <version>`.
+- AC3 — From a clean checkout (no `.venv/`), `make test` creates `.venv/`, installs
+  pytest, runs the test suite, and exits 0 with all tests passing.
+- AC4 — A second `make test` run does not reinstall dependencies and still exits 0.
+- AC5 — `make test` exits non-zero when a test fails (verified by temporarily adding
+  a failing test, then removing it — not committed).
+- AC6 — `make clean` removes `.venv/` and `.pytest_cache/`.
+- AC7 — `README.md` documents requirements, layout, `make test`, the manual venv alternative,
+  and how to run the app.
+- AC8 — `CLAUDE.md` Stack section names Python 3 / pytest / `src/` layout and states
+  the test command `make test`.
+- AC9 — No files under `factory/` are modified by the build; `.venv/` and caches are
+  not committed.
+repo: local:v1-parity
+base_sha: 51b5647a86b727c1fb87ca2119f7a50433ccb3aa
+definition_sha: 63fc255a4bee6f5af4250b6b50a617e71341ca1c
+source_job: v1:001
+merge_sha: 07b172ba7bcf23bd8fa08f58d9e7d3e46908dce7
+hidden_checks:
+- tests/test_smoke.py
+check_command: python3 -m unittest -q {file}
+scorers:
+- merge-readiness
+- spec-adherence

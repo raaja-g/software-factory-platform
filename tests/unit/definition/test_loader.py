@@ -220,7 +220,7 @@ def test_apps_dir_merges_into_apps(tmp_path, monkeypatch):
     )
     r = load_definition(str(d))
     assert r.errors == () and r.definition is not None
-    assert set(r.definition.factory.apps) == {"demo", "todo-app"}
+    assert set(r.definition.factory.apps) == {"demo", "todo-app", "v1-parity"}
     assert r.definition.app("todo-app").local_path == "/Users/me/work/todo-app"
     assert r.definition.app("todo-app").merge_policy == MergePolicy.LOCAL_MERGE
 

@@ -130,7 +130,7 @@ def test_apps_join_definition_and_stats(monkeypatch):
             return R()
 
     c = cs.client_for(sessions=lambda: Sess())
-    [app] = c.get("/api/apps").json()
+    app = next(a for a in c.get("/api/apps").json() if a["slug"] == "demo")
     assert app["slug"] == "demo" and app["repo_kind"] == "local"
     assert app["profile"] == "team-gemini" and app["merge_policy"] == "local_merge"
     assert app["counts"]["build"] == 2 and app["cost_today_usd"] == "1.25"

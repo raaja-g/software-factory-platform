@@ -10,7 +10,7 @@ async def test_emit_rejects_unknown_kind():
 
 def test_event_kinds_cover_core_and_exclude_nothing_shared():
     assert {"job.created", "job.stage", "backlog.created", "factory.halted"} <= EVENT_KINDS
-    assert len(EVENT_KINDS) == 35
+    assert len(EVENT_KINDS) == 36
 
 
 def test_event_is_frozen():

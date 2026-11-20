@@ -29,13 +29,20 @@ from swfactory.db.repo import (
     record_run_cost,
     start_agent_run,
 )
-from swfactory.db.tables import AgentRun, App, Job
-from swfactory.definition.models import AppDef, Defaults, Definition, max_turns_for
+from swfactory.db.tables import AgentRun, App, BenchResult, Job
+from swfactory.definition.models import (
+    AppDef,
+    Defaults,
+    Definition,
+    RoleOverride,
+    max_turns_for,
+)
 from swfactory.domain.types import (
     AgentResult,
     AgentTask,
     CostSource,
     Decision,
+    JobKind,
     Role,
     RunStatus,
     ToolPolicy,
@@ -165,6 +172,21 @@ async def pinned_definition(deps: Deps, job_id: UUID) -> tuple[Job, Definition, 
     if slug is None or slug not in defn.factory.apps:
         raise RuntimeError(f"app of job {job_id} is not in definition {job.definition_sha}")
     return job, defn, defn.factory.apps[slug]
+
+
+async def benchmark_overrides(deps: Deps, job: Job) -> dict[str, Any] | None:
+    """A benchmark job's configuration overrides (its bench result row); None for other jobs."""
+    if job.kind != JobKind.BENCHMARK.value:
+        return None
+    async with deps.sessions() as s:
+        found = await s.scalar(select(BenchResult.overrides).where(BenchResult.job_id == job.id))
+    return dict(found) if isinstance(found, dict) else None
+
+
+async def benchmark_role_overrides(deps: Deps, job: Job) -> dict[Role, RoleOverride] | None:
+    ov = await benchmark_overrides(deps, job)
+    roles = (ov or {}).get("roles") or {}
+    return {Role(r): RoleOverride.model_validate(o) for r, o in roles.items()} or None
 
 
 def step_timeout_s(defn: Definition, key: str) -> int:
@@ -812,6 +834,7 @@ async def _attempt(
             app,
             override=job.profile_name,
             triage_profile=(job.triage or {}).get("profile_name"),
+            role_overrides=await benchmark_role_overrides(deps, job),
         )
         sel_ctx = await build_selection_context(deps, job, role, round, box)
         picked = await deps.selector.choose(profile, sel_ctx, exclude=set(exclude))

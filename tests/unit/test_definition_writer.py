@@ -205,3 +205,66 @@ async def test_github_writer_serial_and_spaced():
     )
     t = gh.mutation_times
     assert len(t) == 6 and min(b - a for a, b in zip(t, t[1:], strict=False)) >= 1.0
+
+
+BENCH_FILES = {
+    "benchmarks/v1/suite.yaml": "a: 1\n",
+    "benchmarks/v1/tasks/003-todo-web.yaml": "b: 1\n",
+    "benchmarks/v1/checks/003-todo-web/tests/test_web.py": "x\n",
+}
+
+
+def commits_added(repo) -> int:
+    return int(_git(repo, "rev-list", "--count", "HEAD")) - 1
+
+
+async def test_save_files_one_commit(tmp_git_repo):
+    r = await LocalGitDefinitionWriter(tmp_git_repo).save_files(
+        BENCH_FILES, message="bench: add", author="local"
+    )
+    assert (r.mode, commits_added(tmp_git_repo)) == ("commit", 1)
+    assert (tmp_git_repo / "benchmarks/v1/checks/003-todo-web/tests/test_web.py").exists()
+
+
+async def test_save_files_one_pr(fake_github):
+    r = await GitHubDefinitionWriter(fake_github, "org/def", "main").save_files(
+        BENCH_FILES, message="bench: add", author="a"
+    )
+    assert r.mode == "pr"
+    assert fake_github.calls == ["create_ref"] + ["create_or_update_file_contents"] * 3 + [
+        "create_pull"
+    ]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "factory.yaml",
+        "runners/standard.yaml",
+        "profiles/x.yaml",
+        ".github/workflows/x.yml",
+        "benchmarks/v1/../../factory.yaml",
+        "benchmarks/v1/checks/t/../../../../runners/x.yaml",
+        "benchmarks/v1/checks/t/./a.py",
+        "/benchmarks/v1/suite.yaml",
+        "benchmarks/V1/suite.yaml",
+        "benchmarks/v1/tasks/sub/x.yaml",
+        "benchmarks/v1/checks/t/.git/config",
+    ],
+)
+async def test_save_files_writes_only_benchmarks(tmp_git_repo, fake_github, path):
+    files = {**BENCH_FILES, path: "x\n"}
+    with pytest.raises(DefinitionWriteError):
+        await LocalGitDefinitionWriter(tmp_git_repo).save_files(files, message="m", author="local")
+    with pytest.raises(DefinitionWriteError):
+        await GitHubDefinitionWriter(fake_github, "org/def", "main").save_files(
+            files, message="m", author="a"
+        )
+    assert commits_added(tmp_git_repo) == 0 and fake_github.calls == []
+
+
+async def test_save_file_still_refuses_benchmarks(tmp_git_repo):
+    with pytest.raises(DefinitionWriteError):
+        await LocalGitDefinitionWriter(tmp_git_repo).save_file(
+            "benchmarks/v1/suite.yaml", "a: 1\n", message="m", author="local"
+        )

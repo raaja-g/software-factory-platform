@@ -68,6 +68,7 @@ services:
     volumes:
       - ${FACTORY_DEFINITION_PATH}:/definition
       - artifacts:/var/lib/factory/artifacts
+      - repos:/repos:ro
     ports:
       - "127.0.0.1:8080:8080"
     healthcheck:

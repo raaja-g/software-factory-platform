@@ -1,0 +1,39 @@
+title: 'Fix 403 on browser form posts (Origin: null)'
+feature: 'Fix: browser form POSTs to the todo web page get 403 "cross-origin request
+  refused". Cause: Referrer-Policy: no-referrer makes browsers send Origin: null on
+  same-origin form POSTs (Fetch spec), which _check_origin rejects. Change Referrer-Policy
+  to same-origin, keep rejecting Origin: null, and add a test that fails if the referrer
+  policy would make browsers send Origin: null (ideally a real-browser test of add
+  and done).'
+success_criteria:
+- 'AC1 — Every response (200, 303, 400, 403, 404, 405, 415, 500) carries `Referrer-Policy:
+  same-origin`; the other security headers are unchanged.'
+- 'AC2 — A POST to `/add` or `/done` with `Origin: http://127.0.0.1:<port>` or `http://localhost:<port>`
+  (matching Host) returns 303 and changes the store.'
+- 'AC3 — A POST with `Origin: null`, a foreign origin, or a wrong port still returns
+  403 and leaves the store byte-for-byte unchanged; a POST with no Origin is still
+  accepted.'
+- 'AC4 — A regression test derives the browser''s Origin from the served `Referrer-Policy`
+  header via the Fetch-spec model and fails if that Origin would be `null` for a same-origin
+  form POST (verified by temporarily setting the header back to `no-referrer`: the
+  test fails).'
+- AC5 — The rendered page contains no `<meta name="referrer">` and no `referrerpolicy`
+  attribute.
+- AC6 — With Playwright and a Chromium/Chrome available, `make test-browser` adds
+  a todo and marks it done through real form submissions, with no 403, and the POSTs
+  carry the real page Origin. Without Playwright, `make test` passes and the browser
+  test is reported as skipped.
+- AC7 — `make test` passes with only `requirements-dev.txt` installed; all pre-existing
+  tests still pass (with the header assertion updated).
+repo: local:v1-parity
+base_sha: 7c527babd3f7f9e0be8d82496aade8e2f12c21a8
+definition_sha: 8adba2270987480d1eaa394bd8a8c7dc7bfcd117
+source_job: v1:004
+merge_sha: ea3ee1f80806f059052310a98fffeb0ee3583a34
+hidden_checks:
+- tests/test_browser.py
+- tests/test_web.py
+check_command: python3 -m unittest -q {file}
+scorers:
+- merge-readiness
+- spec-adherence

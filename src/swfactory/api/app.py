@@ -33,6 +33,7 @@ from swfactory.api.auth import (
 )
 from swfactory.api.routes import apps as apps_routes
 from swfactory.api.routes import backlogs as backlogs_routes
+from swfactory.api.routes import bench as bench_routes
 from swfactory.api.routes import board as board_routes
 from swfactory.api.routes import definition as definition_routes
 from swfactory.api.routes import hooks as hooks_routes
@@ -89,6 +90,8 @@ class DefinitionWriter(Protocol):
     """Writes definition files (M7.4a supplies the implementations)."""
 
     async def save_file(self, path: str, content: str, *, message: str, author: str) -> Any: ...
+
+    async def save_files(self, files: Mapping[str, str], *, message: str, author: str) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -315,6 +318,7 @@ def create_app(
     for r in (
         apps_routes,
         backlogs_routes,
+        bench_routes,
         models_routes,
         profiles_routes,
         definition_routes,

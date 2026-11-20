@@ -18,8 +18,8 @@ RUN apt-get update \
  && apt-get clean \
  && groupadd -g 10001 factory \
  && useradd -u 10001 -g 10001 -d /home/factory -m factory \
- && mkdir -p /var/lib/factory/artifacts /gateway-config /pkg-auth \
- && chown 10001:10001 /var/lib/factory/artifacts /gateway-config /pkg-auth \
+ && mkdir -p /var/lib/factory/artifacts /gateway-config /pkg-auth /repos \
+ && chown 10001:10001 /var/lib/factory/artifacts /gateway-config /pkg-auth /repos \
  && git config --system safe.directory /definition
 COPY --from=build /app/.venv /app/.venv
 ENV PATH=/app/.venv/bin:$PATH

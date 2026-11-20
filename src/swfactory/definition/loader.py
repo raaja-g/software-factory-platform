@@ -11,7 +11,7 @@ import tempfile
 from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -161,7 +161,37 @@ def _read_tree(root: Path) -> _Reader:
         for name in r.listdir(f"{base}/tasks"):
             if name.endswith(".yaml"):
                 r.read(f"{base}/tasks/{name}")
+                _read_check_files(r, suite, name[: -len(".yaml")])
     return r
+
+
+def _read_check_files(r: _Reader, suite: str, task: str) -> None:
+    """Read benchmarks/<suite>/checks/<task>/<path> for each hidden_checks path of a task."""
+    raw = r.files.get(f"benchmarks/{suite}/tasks/{task}.yaml")
+    if raw is None:
+        return
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError:
+        return
+    paths = data.get("hidden_checks") if isinstance(data, dict) else None
+    if not isinstance(paths, list):
+        return
+    for p in paths:
+        pp = PurePosixPath(p) if isinstance(p, str) else None
+        if pp is None or not p or pp.is_absolute() or ".." in pp.parts or "\\" in p:
+            continue  # the model reports the bad path
+        parent = f"benchmarks/{suite}/checks/{task}"
+        ok = True
+        for part in pp.parts[:-1]:
+            parent = f"{parent}/{part}"
+            st = r._lstat(parent)
+            if st is not None and not stat.S_ISDIR(st.st_mode):
+                r._err(parent, _SYMLINK_MSG)
+                ok = False
+                break
+        if ok:
+            r.read(f"benchmarks/{suite}/checks/{task}/{p}", required=True)
 
 
 # --------------------------------------------------------------------------
@@ -317,6 +347,24 @@ def _assemble(reader: _Reader) -> tuple[dict[str, Any] | None, dict[str, _Source
             td = mapping(trel, tp)
             if td is None:
                 continue
+            td = dict(td)
+            if "check_files" in td:
+                errors.append(
+                    DefinitionError(
+                        trel, None, "", "check_files is read from checks/ files, not from YAML"
+                    )
+                )
+                continue
+            cf: dict[str, str] = {}
+            for hp in td.get("hidden_checks") or []:
+                crel = f"benchmarks/{suite}/checks/{_stem(trel)}/{hp}"
+                if isinstance(hp, str) and crel in files:
+                    try:
+                        cf[hp] = files[crel].decode("utf-8")
+                    except UnicodeDecodeError:
+                        errors.append(DefinitionError(crel, None, "", "file is not valid UTF-8"))
+            if cf:
+                td["check_files"] = cf
             tasks[_stem(trel)] = td
             sources[f"benchmarks/{suite}/tasks/{_stem(trel)}"] = _Source(trel, tp)
         if tasks:

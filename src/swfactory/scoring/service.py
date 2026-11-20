@@ -62,6 +62,10 @@ def quality_badge(rows: Sequence[ScoreRow]) -> ScoreRow:
     )
 
 
+def _success_criteria(items: Sequence[str]) -> str:
+    return "# Success criteria\n\n" + "\n".join(f"- {i}" for i in items) + "\n"
+
+
 @dataclass(frozen=True, slots=True)
 class ScoreSummary:
     job_id: UUID
@@ -151,10 +155,25 @@ class ScoringService:
                 errors.append(f"judges: {exc}")
                 oks, judge_ok = [], 0
             occurrence = int(judge_ok or 0) + 1
+            task = None
+            if kind == JobKind.BENCHMARK.value:
+                from swfactory.bench.runner import trial_task
+
+                try:
+                    task = await trial_task(self.sessions, defn, job_id)
+                except Exception as exc:
+                    errors.append(f"benchmark task: {exc}")
+            extra = (
+                {"success-criteria": _success_criteria(task.success_criteria)}
+                if task is not None and task.success_criteria
+                else {}
+            )
             for name in sorted(defn.scorers):
                 scorer = defn.scorers[name]
                 if only is not None and name not in only:
                     continue
+                if task is not None and task.scorers and name not in task.scorers:
+                    continue  # a benchmark task judges with its own scorers only
                 if getattr(deps, "roles", None) is None:  # the API process cannot run agents
                     skipped.append(f"{name}: judges run on the worker")
                     continue
@@ -176,7 +195,13 @@ class ScoringService:
                     continue
                 try:
                     row = await run_judge(
-                        deps, job_id, name, scorer, round=rnd, occurrence=occurrence
+                        deps,
+                        job_id,
+                        name,
+                        scorer,
+                        round=rnd,
+                        occurrence=occurrence,
+                        extra_sections=extra,
                     )
                     async with self.sessions() as s, s.begin():
                         await replace_scores(s, job_id, [row], scorers=[name])
@@ -205,5 +230,8 @@ class ScoringService:
         return ScoreSummary(job_id, quality, rows, judges, tuple(skipped), tuple(errors))
 
     async def _after_benchmark(self, job_id: UUID) -> None:
-        """Seam for M10.11: a no-op until then."""
-        return None
+        """Fill the trial's result row; the job is done and scored by now."""
+        from swfactory.bench.runner import record_trial
+
+        async with self.sessions() as s, s.begin():
+            await record_trial(s, job_id)

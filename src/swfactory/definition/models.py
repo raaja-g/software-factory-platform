@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from croniter import croniter
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     StringConstraints,
@@ -20,7 +21,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic.json_schema import models_json_schema
+from pydantic.json_schema import SkipJsonSchema, models_json_schema
 
 from swfactory.costs.pricing import STEP_MAX_DEFAULT_USD, STEP_MIN_USD
 from swfactory.domain.types import (
@@ -586,9 +587,41 @@ class ScorerDef(StrictModel):
     rubric: str = ""
 
 
+def _check_bench_name(v: Any) -> Any:
+    if isinstance(v, str) and not re.match(SLUG_PATTERN, v):
+        raise ValueError(f"name '{v}' must match {SLUG_PATTERN}")
+    return v
+
+
+BenchName = Annotated[
+    str, BeforeValidator(_check_bench_name), StringConstraints(pattern=SLUG_PATTERN)
+]
+
+TRIAGE_QUESTIONS = ("kind", "size", "risk", "touches_ui")
+CHECK_FILE_MAX_BYTES = 262_144
+
+
+class RoleOverride(StrictModel):
+    engine: str | None = None
+    model: str | None = None
+    mode: SelectionMode | None = None
+
+
 class BenchConfigDef(StrictModel):
-    name: str
+    name: BenchName
     profile: str
+    roles: dict[Role, RoleOverride] = {}
+    triage_modes: dict[str, TriageMode] = {}
+
+    @field_validator("triage_modes")
+    @classmethod
+    def _known_questions(cls, v: dict[str, TriageMode]) -> dict[str, TriageMode]:
+        for q in v:
+            if q not in TRIAGE_QUESTIONS:
+                raise ValueError(
+                    f"unknown triage question '{q}'; allowed: {', '.join(TRIAGE_QUESTIONS)}"
+                )
+        return v
 
 
 class BenchTaskDef(StrictModel):
@@ -597,19 +630,55 @@ class BenchTaskDef(StrictModel):
     success_criteria: tuple[str, ...] = ()
     repo: str
     base_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
-    merge_sha: str | None = None
+    source_job: str | None = None
+    merge_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
     definition_sha: str
     hidden_checks: tuple[str, ...] = ()
-    check_command: str | None = None
+    check_command: str
+    check_files: SkipJsonSchema[dict[str, str]] = Field(default={}, exclude=True)
     scorers: tuple[str, ...] = ()
+
+    @field_validator("check_command")
+    @classmethod
+    def _needs_placeholder(cls, v: str) -> str:
+        if "{file}" not in v:
+            raise ValueError("check_command must contain {file}")
+        return v
+
+    @field_validator("hidden_checks")
+    @classmethod
+    def _safe_paths(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        for p in v:
+            pp = PurePosixPath(p)
+            if not p or pp.is_absolute() or ".." in pp.parts or "\\" in p:
+                raise ValueError(
+                    f"hidden_checks path '{p}' must be relative and stay inside checks/"
+                )
+        return v
 
 
 class BenchSuiteDef(StrictModel):
     description: str = ""
-    budget_usd: Decimal | None = None
+    budget_usd: Decimal = Decimal("40")
     max_parallel: int = 1
     configurations: tuple[BenchConfigDef, ...] = Field(min_length=1, max_length=6)
-    tasks: dict[str, BenchTaskDef] = {}
+    tasks: dict[BenchName, BenchTaskDef] = {}
+
+    @field_validator("configurations", mode="before")
+    @classmethod
+    def _at_most_six(cls, v: Any) -> Any:
+        if isinstance(v, (list, tuple)) and len(v) > 6:
+            raise ValueError("a suite has at most 6 configurations")
+        return v
+
+    @model_validator(mode="after")
+    def _unique_names(self) -> "BenchSuiteDef":
+        seen: set[str] = set()
+        for c in self.configurations:
+            if c.name in seen:
+                raise ValueError(f"duplicate configuration name '{c.name}'")
+            seen.add(c.name)
+        return self
 
 
 class Definition(StrictModel):
@@ -620,7 +689,7 @@ class Definition(StrictModel):
     automations: dict[str, AutomationDef] = {}
     webhooks: dict[str, WebhookDef] = {}
     scorers: dict[str, ScorerDef] = {}
-    benchmarks: dict[str, BenchSuiteDef] = {}
+    benchmarks: dict[BenchName, BenchSuiteDef] = {}
 
     @model_validator(mode="after")
     def _check_webhook_ids(self) -> "Definition":
@@ -840,6 +909,13 @@ def check_references(defn: Definition, policy: DefinitionPolicy) -> tuple[Defini
     for bname, suite in defn.benchmarks.items():
         for i, cfg in enumerate(suite.configurations):
             check_profile(("benchmarks", bname, "configurations", i, "profile"), cfg.profile)
+        for tname, task in suite.tasks.items():
+            for i, sc_name in enumerate(task.scorers):
+                if sc_name not in defn.scorers:
+                    ref(
+                        ("benchmarks", bname, "tasks", tname, "scorers", i),
+                        f"unknown scorer '{sc_name}'",
+                    )
 
     return tuple(out)
 

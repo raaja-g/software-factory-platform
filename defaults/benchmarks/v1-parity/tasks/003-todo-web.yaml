@@ -1,0 +1,59 @@
+title: Add a local todo web page
+feature: Add a tiny local web page (served by Python's stdlib http.server) that lists
+  todos and lets you add and complete them
+success_criteria:
+- 'AC1: `GET /` with an empty or missing store returns 200 and `text/html; charset=utf-8`,
+  contains `No todos yet.` and the add form (`action="/add"`, input `name="text"`),
+  and does **not** create the store file.'
+- 'AC2: `GET /` lists the existing items in order with CLI numbering. Open items have
+  a `/done` form with `name="number" value="N"`. Done items are visibly marked done
+  and have no Done button.'
+- 'AC3: `POST /add` with `text=  buy milk ` returns 303 `Location: /`, the store then
+  contains `{"text": "buy milk", "done": false}` as the last item, and a following
+  `GET /` shows it.'
+- 'AC4: `POST /add` with empty or whitespace-only `text` (or no `text` field) returns
+  400, the body contains `todo text must not be empty` inside a `role="alert"` element,
+  and the store bytes are unchanged (or the file is still absent).'
+- 'AC5: `POST /done` with `number=2` returns 303 `Location: /` and item 2 is `done:
+  true`. Completing an already-done item also returns 303 and leaves the file bytes
+  unchanged.'
+- 'AC6: `POST /done` with `number` set to `0`, `99`, `abc`, an empty value or no field
+  returns 400, and the store is unchanged. The out-of-range case shows the `no todo
+  #N (have M)` message.'
+- 'AC7: Item text containing `<script>alert(1)</script>`, `"` and `&` is shown escaped
+  (`&lt;script&gt;`, `&quot;`, `&amp;`). The raw `<script>` never appears in the response.
+  The page has no `<script>` tags at all.'
+- 'AC8: A corrupt store file (e.g. `{not json`) makes `GET /`, `POST /add` and `POST
+  /done` all return 500 with the escaped error message, and the file bytes are unchanged.'
+- 'AC9: A POST with `Origin: http://evil.example` returns 403 and the store is unchanged.
+  A request with `Host: evil.example` returns 400 or 403. A POST with the correct
+  `Origin` succeeds.'
+- 'AC10: A POST with `Content-Length` over 10 000 returns 413. A POST with `Content-Type:
+  application/json` returns 415. Neither changes the store.'
+- 'AC11: Unknown paths return 404. `GET /add` returns 405 with `Allow: POST`.'
+- 'AC12: Every HTML response carries the CSP, `X-Content-Type-Options: nosniff`, `Referrer-Policy:
+  no-referrer` and `Cache-Control: no-store` headers listed in the Design section.'
+- 'AC13: `make_server(port=0, path=...)` binds to `127.0.0.1` only (`server.server_address[0]
+  == "127.0.0.1"`).'
+- 'AC14: The CLI and the web page share data. An item added with `app.todo.add_item`
+  (or `python -m app.todo add`) appears on `GET /`, and an item added through `POST
+  /add` appears in `app.todo.load_items()`. Unicode text (`café ☕`) round-trips through
+  the form and the page.'
+- 'AC15: `python -m app.web --port 0` (subprocess, with `HOME` set to a temp dir)
+  prints `Serving todos at http://127.0.0.1:<port>/`, serves `GET /` on that port,
+  and exits on SIGINT. `--port abc` exits 2. If the port is already in use, it prints
+  `error:` to stderr and exits 1.'
+- 'AC16: The existing test suite passes unchanged, and `README.md` documents how to
+  run the web page (`cd src && python3 -m app.web [--port N]`, the URL, that it binds
+  only to localhost, and that it shares `~/.todo.json` with the CLI).'
+repo: local:v1-parity
+base_sha: 4601d1c1f6c180ceea9c25c0770c108faf264258
+definition_sha: 282ed6e275098aa66905982446015b97150f0fcd
+source_job: v1:003
+merge_sha: 58c4018e3c61ceaef4a70f7727d8bb3d025982b8
+hidden_checks:
+- tests/test_web.py
+check_command: python3 -m unittest -q {file}
+scorers:
+- merge-readiness
+- spec-adherence

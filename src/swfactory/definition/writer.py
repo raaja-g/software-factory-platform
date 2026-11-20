@@ -11,7 +11,7 @@ import base64
 import re
 import subprocess
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +20,10 @@ from typing import Any, Literal, Protocol
 from swfactory.gitops.service import SAFE_GIT_ENV, safe_git
 
 _PATH_RE = re.compile(r"^(profiles|apps)/[a-z0-9][a-z0-9-]{0,39}\.yaml$")
+_SLUG = r"[a-z0-9][a-z0-9-]{0,39}"
+BENCH_PATH_RE = re.compile(
+    rf"^benchmarks/{_SLUG}/(suite\.yaml|tasks/{_SLUG}\.yaml|checks/{_SLUG}(/[A-Za-z0-9_][A-Za-z0-9._-]*)+)$"
+)
 _STRIP_AUTHOR = re.compile(r"[<>\x00-\x1f\x7f]")
 _BOT = {
     "GIT_COMMITTER_NAME": "factory-bot",
@@ -44,6 +48,20 @@ class DefinitionWriter(Protocol):
     async def save_file(
         self, path: str, content: str, *, message: str, author: str
     ) -> SaveResult: ...
+
+    async def save_files(
+        self, files: Mapping[str, str], *, message: str, author: str
+    ) -> SaveResult: ...
+
+
+def _check_bench_paths(files: Mapping[str, str]) -> None:
+    if not files:
+        raise DefinitionWriteError("no files to write")
+    for path in files:
+        if not BENCH_PATH_RE.fullmatch(path):
+            raise DefinitionWriteError(
+                f"refusing to write {path!r}: only benchmarks/<suite>/ suite, task and check files"
+            )
 
 
 def _check_path(path: str) -> None:
@@ -98,6 +116,33 @@ class LocalGitDefinitionWriter:
     async def save_file(self, path: str, content: str, *, message: str, author: str) -> SaveResult:
         _check_path(path)
         return await asyncio.to_thread(self._save, path, content, message, author)
+
+    def _save_many(self, files: Mapping[str, str], message: str, author: str) -> SaveResult:
+        root = self._repo.resolve()
+        for path in files:
+            target = (root / path).resolve()
+            if not target.is_relative_to(root / "benchmarks"):
+                raise DefinitionWriteError(f"refusing to write {path!r}: path escapes benchmarks/")
+            if self._git("status", "--porcelain", "--", path).strip():
+                raise DefinitionWriteError(
+                    f"{path} has uncommitted changes; commit or discard them first"
+                )
+        paths = list(files)
+        for path in paths:
+            target = root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(files[path], encoding="utf-8")
+        self._git("add", "--", *paths)
+        if self._git("status", "--porcelain", "--", *paths).strip():
+            who = _clean_author(author)
+            self._git("commit", "-m", message, f"--author={who} <{who}>", "--", *paths)
+        return SaveResult("commit", self._git("rev-parse", "HEAD").strip(), None)
+
+    async def save_files(
+        self, files: Mapping[str, str], *, message: str, author: str
+    ) -> SaveResult:
+        _check_bench_paths(files)
+        return await asyncio.to_thread(self._save_many, dict(files), message, author)
 
 
 class GitHubClientLike(Protocol):
@@ -181,6 +226,44 @@ class GitHubDefinitionWriter:
                     head=branch,
                     base=self._base,
                     body=f"Edited by {who} through the factory UI.",
+                )
+            except DefinitionWriteError:
+                raise
+            except Exception as exc:
+                raise DefinitionWriteError(f"GitHub save failed: {type(exc).__name__}") from exc
+        return SaveResult("pr", None, str(url))
+
+    async def save_files(
+        self, files: Mapping[str, str], *, message: str, author: str
+    ) -> SaveResult:
+        _check_bench_paths(files)
+        suite = next(iter(files)).split("/")[1]
+        branch = f"edit/bench-{suite}-{datetime.now(UTC).strftime('%Y%m%d%H%M')}"
+        who = _clean_author(author)
+        async with self._lock:
+            try:
+                gh = await self._factory()
+                base_sha = await gh.get_branch_sha(self._repo, self._base)
+                await self._mutate(gh.create_ref, self._repo, f"refs/heads/{branch}", base_sha)
+                for path, content in files.items():
+                    old = await gh.get_file_sha(self._repo, path, self._base)
+                    await self._mutate(
+                        gh.create_or_update_file_contents,
+                        self._repo,
+                        path,
+                        message=message,
+                        content=base64.b64encode(content.encode()).decode(),
+                        branch=branch,
+                        sha=old,
+                        author=who,
+                    )
+                url = await self._mutate(
+                    gh.create_pull,
+                    self._repo,
+                    title=message,
+                    head=branch,
+                    base=self._base,
+                    body=f"Benchmark files added by {who} through the factory.",
                 )
             except DefinitionWriteError:
                 raise

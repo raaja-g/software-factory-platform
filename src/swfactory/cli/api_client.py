@@ -122,6 +122,60 @@ class ApiClient:
             body = {"action": action, "note": note, "amount_usd": amount_usd}
         return self._call("POST", f"/api/jobs/{_ref(ref)}/actions", json=body)
 
+    def add_bench_task(
+        self,
+        job: str,
+        suite: str,
+        *,
+        name: str | None = None,
+        scorers: list[str] | None = None,
+        check_command: str | None = None,
+    ) -> dict[str, Any]:
+        body = {
+            "job": job,
+            "suite": suite,
+            "name": name,
+            "scorers": scorers or [],
+            "check_command": check_command,
+        }
+        return self._call("POST", "/api/bench/tasks", json=body)
+
+    def bench_estimate(
+        self, suite: str, *, configs: list[str] | None = None, repetitions: int = 1
+    ) -> dict[str, Any]:
+        body = {"suite": suite, "configs": configs or None, "repetitions": repetitions}
+        return self._call("POST", "/api/bench/estimate", json=body)
+
+    def bench_run(
+        self,
+        suite: str,
+        *,
+        accept_estimate_usd: str,
+        configs: list[str] | None = None,
+        repetitions: int = 1,
+        budget: Decimal | None = None,
+        definition: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "suite": suite,
+            "configs": configs or None,
+            "repetitions": repetitions,
+            "accept_estimate_usd": accept_estimate_usd,
+            "definition_sha": definition,
+        }
+        if budget is not None:
+            body["budget_usd"] = str(budget)
+        return self._call("POST", "/api/bench/runs", json=body)
+
+    def bench_suites(self) -> list[dict[str, Any]]:
+        return self._call("GET", "/api/bench/suites")
+
+    def bench_runs(self) -> list[dict[str, Any]]:
+        return self._call("GET", "/api/bench/runs")
+
+    def bench_report(self, run_id: str) -> dict[str, Any]:
+        return self._call("GET", f"/api/bench/runs/{run_id}")
+
     def job_scores(self, ref: str) -> list[dict[str, Any]]:
         return self._call("GET", f"/api/jobs/{_ref(ref)}/scores")
 

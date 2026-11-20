@@ -230,3 +230,13 @@ table.data tr.uncal td{color:var(--muted)}
 .quality.good{background:var(--pass);border-color:var(--pass);color:var(--pass-ink)}
 .quality.fair{background:var(--changes);border-color:var(--changes);color:var(--changes-ink)}
 .quality.poor{background:var(--andon);border-color:var(--andon);color:#fff}
+
+/* benchmarks */
+svg.bench-chart{display:block;width:100%;max-width:520px;height:auto;margin:0 0 16px;font:11px var(--mono)}
+svg.bench-chart .axis{stroke:var(--rule);stroke-width:1}
+svg.bench-chart .tick{fill:var(--muted)}
+svg.bench-chart .lbl{fill:var(--ink)}
+svg.bench-chart .pt{fill:none;stroke:var(--ink);stroke-width:2}
+svg.bench-chart .pt.pareto{fill:var(--pass);stroke:var(--pass)}
+.recommended{margin:0 0 12px}
+.bench-start .status-line{min-height:1.4em}

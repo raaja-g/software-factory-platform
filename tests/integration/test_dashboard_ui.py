@@ -134,6 +134,48 @@ JOBS = [
     ),  # fmt: skip
 ]
 
+BENCH_RUN_ID = "00000000-0000-0000-0000-0000000000a1"
+ESTIMATE_FIXTURE = {
+    "suite": "v1-parity", "configs": ["gemini", "claude", "economy"], "repetitions": 1,
+    "trials": 12, "estimate_usd": "57.48", "max_usd": "120.48", "budget_usd": "40",
+    "per_config": {}, "basis": {},
+}  # fmt: skip
+
+
+def _cfg(name: str, rate: float, iv: list[float], cost: str) -> dict[str, Any]:
+    return {
+        "name": name, "trials": 4, "completed": 4, "not_run": 0, "hidden_pass_rate": rate,
+        "judge_pass_rate": None, "judge_pass_rate_uncalibrated": None, "quality": rate,
+        "mean_rounds": 2.0, "total_cost_usd": "4.8", "mean_cost_usd": cost,
+        "median_duration_s": 60.0, "hidden_pass_interval": iv, "task_pass": {},
+    }  # fmt: skip
+
+
+BENCH_REPORT = {
+    "id": BENCH_RUN_ID, "run_id": BENCH_RUN_ID, "suite": "v1-parity", "definition_sha": "a" * 40,
+    "status": "done", "budget_usd": "40", "cost_usd": "20", "recommended": "gemini",
+    "recommendation_reason": "gemini: quality 1.00 at $1.20 per task (claude: 1.00 at $2.40)",
+    "lowest_cost": "economy", "best_quality": "gemini", "pareto": ["economy", "gemini"],
+    "configs": [
+        _cfg("claude", 1.0, [0.51, 1.0], "2.40"), _cfg("economy", 0.75, [0.30, 0.95], "0.50"),
+        _cfg("gemini", 1.0, [0.51, 1.0], "1.20"),
+    ],
+    "chart": [
+        {"config": "claude", "cost_usd": "2.400000", "quality": 1.0, "pareto": False},
+        {"config": "economy", "cost_usd": "0.500000", "quality": 0.75, "pareto": True},
+        {"config": "gemini", "cost_usd": "1.200000", "quality": 1.0, "pareto": True},
+    ],
+    "common_tasks": [], "invalid_tasks": [], "invalid_reasons": {},
+}  # fmt: skip
+BENCH_SUITES = [
+    {"name": "v1-parity", "description": "", "tasks": 4,
+     "configurations": ["gemini", "claude", "economy"], "budget_usd": "40"},
+]  # fmt: skip
+BENCH_RUNS = [
+    {"id": BENCH_RUN_ID, "suite": "v1-parity", "status": "done", "cost_usd": "20",
+     "budget_usd": "40"},
+]  # fmt: skip
+
 METRICS = {
     "available": True, "window_days": 30, "jobs": 4, "escalation_rate": 0.25,
     "cost_per_merged_usd": "3.000000", "fallback_rate": 0.1,
@@ -265,6 +307,9 @@ def install(page: Page, role: str, sse_status: int = 200) -> Rec:
                 return _json(route, {"request_id": 7}, 202)
             if path == "/api/definition/sync":
                 return _json(route, {"active_sha": FIXTURE_SHA, "apps": {}})
+            if path == "/api/bench/estimate":
+                r.posts.append((path, req.post_data_json))
+                return _json(route, ESTIMATE_FIXTURE)
             return _json(route, {"command_id": "c1"}, 202)
         r.gets.append(path)
         if path == "/api/me":
@@ -291,6 +336,12 @@ def install(page: Page, role: str, sse_status: int = 200) -> Rec:
             return _json(route, APPS)
         if path == "/api/definition":
             return _json(route, DEFINITION)
+        if path == "/api/bench/suites":
+            return _json(route, BENCH_SUITES)
+        if path == "/api/bench/runs":
+            return _json(route, BENCH_RUNS)
+        if path == f"/api/bench/runs/{BENCH_RUN_ID}":
+            return _json(route, BENCH_REPORT)
         if path == "/api/metrics":
             return _json(route, METRICS)
         if path == "/api/jobs/todo:003/scores/merge-readiness/label" and req.method == "PUT":
@@ -787,3 +838,21 @@ def test_done_card_quality_badge(page: Page) -> None:
     expect(badge).to_be_visible()
     assert badge.get_attribute("title") == "1 of 2 judges passed"
     expect(card_of(page, "011-delivered-one").get_by_text("Quality:")).to_have_count(0)
+
+
+def pick_suite(page: Page, name: str) -> None:
+    page.get_by_label("Suite").select_option(name)
+
+
+@pytest.mark.ui
+def test_benchmarks_page(page: Page) -> None:
+    goto(page, f"#/benchmarks/{BENCH_RUN_ID}")
+    expect(page.locator("svg.bench-chart circle")).to_have_count(3)
+    expect(page.get_by_text("Recommended: gemini")).to_be_visible()
+    expect(page.get_by_text("0.75 (n=4, 0.30\u20130.95)")).to_be_visible()
+    goto(page, "#/benchmarks")
+    start = page.get_by_role("button", name="Start benchmark run")
+    expect(start).to_be_disabled()
+    pick_suite(page, "v1-parity")
+    expect(page.get_by_text("Estimated $57.48 (up to $120.48)")).to_be_visible()
+    expect(start).to_be_enabled()

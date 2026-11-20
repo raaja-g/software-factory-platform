@@ -39,6 +39,7 @@ async def seed_demo(
     apps: Sequence[str] = ("demo",),
     concurrency: Mapping[str, int] | None = None,
     triage_rules: Sequence[Mapping[str, Any]] = (),
+    benchmarks: Mapping[str, Any] | None = None,
 ) -> str:
     """Save and activate a definition (unique sha) with the given apps; return its sha."""
     with tempfile.TemporaryDirectory() as d:
@@ -65,7 +66,10 @@ async def seed_demo(
             }
         )
     sha = f"sha-{uuid.uuid4().hex}"
-    r = replace(r, sha=sha, definition=r.definition.model_copy(update={"factory": fac}))
+    update: dict[str, Any] = {"factory": fac}
+    if benchmarks is not None:
+        update["benchmarks"] = dict(benchmarks)
+    r = replace(r, sha=sha, definition=r.definition.model_copy(update=update))
     assert await DefinitionStore(sessions).save(r)
     return sha
 

@@ -35,6 +35,7 @@ EVENT_KINDS = frozenset(
         "delivery.merged",
         "cost.updated",
         "score.recorded",
+        "bench.gate",
         "job.failed",
         "job.stuck",
         "job.migrated",

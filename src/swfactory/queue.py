@@ -69,8 +69,12 @@ async def enqueue_job(
     """Insert a queued job in the caller's transaction; never commits."""
     if backlog_pos is not None and backlog_id is None:
         raise ValueError("backlog_pos needs backlog_id")
-    if (branch is not None or base_sha is not None) and follow_up_of is None:
-        raise ValueError("branch and base_sha are only for follow-up jobs")
+    if kind != JobKind.BENCHMARK:
+        follow_up_ok = follow_up_of is not None and definition_sha is None
+        if definition_sha is not None or (
+            (branch is not None or base_sha is not None) and not follow_up_ok
+        ):
+            raise ValueError("branch, base_sha and definition_sha are only for benchmark jobs")
     found = await load_active(s)
     if found is None:
         raise NoActiveDefinition("no active definition")

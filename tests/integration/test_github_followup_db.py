@@ -98,7 +98,7 @@ async def test_follow_up_refused_twice(sessions):
 async def test_branch_without_follow_up_of_is_rejected(sessions):
     await activate_gh(sessions)
     for branch, base in (("b", None), (None, BASE)):
-        with pytest.raises(ValueError, match="only for follow-up jobs"):
+        with pytest.raises(ValueError, match="only for benchmark jobs"):
             async with sessions.begin() as s:
                 await enqueue_job(
                     s, app_slug="demo-gh", feature="f", title=None, source="cli",

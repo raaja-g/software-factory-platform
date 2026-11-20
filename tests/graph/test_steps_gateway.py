@@ -416,6 +416,10 @@ async def test_error_handler_uses_gate_reason():
 
     h = make_error_handler("build")
     exc = BudgetExceeded("job", Decimal(0), Decimal(1))
-    assert h({}, exc).update == {"gate_reason": "budget", "retry_node": "build"}  # type: ignore[arg-type]
+    assert h({}, exc).update == {  # type: ignore[arg-type]
+        "gate_reason": "budget",
+        "retry_node": "build",
+        "gate_scope": "job",
+    }
     assert h({}, NoModelAvailable("x")).update["gate_reason"] == "no model available"  # type: ignore[arg-type]
     assert h({}, RuntimeError("x")).update["gate_reason"] == "step failed: build"  # type: ignore[arg-type]

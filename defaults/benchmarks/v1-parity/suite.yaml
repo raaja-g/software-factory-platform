@@ -1,0 +1,7 @@
+description: Replay of v1's four features (bootstrap, todo CLI, todo web page, Origin null fix).
+budget_usd: 40
+max_parallel: 1
+configurations:
+  - { name: gemini, profile: team-gemini }
+  - { name: claude, profile: claude-vertex }
+  - { name: economy, profile: mixed-economy }

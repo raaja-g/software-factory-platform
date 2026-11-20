@@ -11,12 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from swfactory.costs.pricing import STEP_MIN_USD
 from swfactory.db import repo
-from swfactory.db.tables import App, BudgetReservation, Job
+from swfactory.db.tables import AgentRun, App, BenchResult, BenchRun, BudgetReservation, Job
 from swfactory.definition.models import Definition
 from swfactory.definition.store import DefinitionStore
-from swfactory.domain.types import Role
+from swfactory.domain.types import JobKind, Role
 
-Scope = Literal["job", "daily", "app_month", "run"]
+Scope = Literal["job", "daily", "app_month", "run", "bench_run"]
 _ZERO = Decimal(0)
 
 
@@ -98,6 +98,9 @@ class BudgetService:
             await repo.spend_for_job(s, job.id),
             await repo.open_reservations(s, job_id=job.id),
         )
+        if job.kind == JobKind.BENCHMARK.value:
+            await self._add_bench_run(s, out, job)
+            return out
         if only_job:
             return out
         day = _day_start(now)
@@ -117,6 +120,32 @@ class BudgetService:
                 await repo.open_reservations(s, app_slug=slug, since=month),
             )
         return out
+
+    async def _add_bench_run(self, s: AsyncSession, out: _Scopes, job: Job) -> None:
+        """The run's own cap: its budget_usd less every spend of its jobs, judges included."""
+        run = await s.scalar(
+            select(BenchRun)
+            .join(BenchResult, BenchResult.run_id == BenchRun.id)
+            .where(BenchResult.job_id == job.id)
+        )
+        if run is None or run.budget_usd is None:
+            return
+        like = f"bench:{run.id}:%"
+        spent = await s.scalar(
+            select(func.coalesce(func.sum(AgentRun.cost_usd), 0))
+            .join(Job, Job.id == AgentRun.job_id)
+            .where(Job.kind == JobKind.BENCHMARK.value, Job.source_ref.like(like))
+        )
+        held = await s.scalar(
+            select(func.coalesce(func.sum(BudgetReservation.amount), 0))
+            .join(Job, Job.id == BudgetReservation.job_id)
+            .where(
+                BudgetReservation.released_at.is_(None),
+                Job.kind == JobKind.BENCHMARK.value,
+                Job.source_ref.like(like),
+            )
+        )
+        out.add("bench_run", run.budget_usd, Decimal(spent or 0), Decimal(held or 0))
 
     async def remaining_for_job(self, job_id: UUID) -> Decimal:
         _, defn = await self.definitions.active()

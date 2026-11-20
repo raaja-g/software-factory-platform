@@ -354,6 +354,25 @@
         "profile": {
           "title": "Profile",
           "type": "string"
+        },
+        "roles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RoleOverride"
+          },
+          "default": {},
+          "propertyNames": {
+            "$ref": "#/$defs/Role"
+          },
+          "title": "Roles",
+          "type": "object"
+        },
+        "triage_modes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TriageMode"
+          },
+          "default": {},
+          "title": "Triage Modes",
+          "type": "object"
         }
       },
       "required": [
@@ -373,12 +392,9 @@
             },
             {
               "type": "string"
-            },
-            {
-              "type": "null"
             }
           ],
-          "default": null,
+          "default": "40",
           "title": "Budget Usd"
         },
         "configurations": {
@@ -424,16 +440,8 @@
           "type": "string"
         },
         "check_command": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Check Command"
+          "title": "Check Command",
+          "type": "string"
         },
         "definition_sha": {
           "title": "Definition Sha",
@@ -452,16 +460,9 @@
           "type": "array"
         },
         "merge_sha": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Merge Sha"
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Merge Sha",
+          "type": "string"
         },
         "repo": {
           "title": "Repo",
@@ -474,6 +475,18 @@
           },
           "title": "Scorers",
           "type": "array"
+        },
+        "source_job": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Job"
         },
         "success_criteria": {
           "default": [],
@@ -493,7 +506,9 @@
         "feature",
         "repo",
         "base_sha",
-        "definition_sha"
+        "merge_sha",
+        "definition_sha",
+        "check_command"
       ],
       "title": "BenchTaskDef",
       "type": "object"
@@ -1135,6 +1150,48 @@
         }
       },
       "title": "RoleFile",
+      "type": "object"
+    },
+    "RoleOverride": {
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Engine"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SelectionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        }
+      },
+      "title": "RoleOverride",
       "type": "object"
     },
     "RoleProfile": {

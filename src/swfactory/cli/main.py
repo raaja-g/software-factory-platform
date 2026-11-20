@@ -1,6 +1,7 @@
 """The ``factory`` command line."""
 
 import asyncio
+import json
 import os
 import signal
 from decimal import Decimal
@@ -916,6 +917,199 @@ def score_cmd(
             typer.echo(_score_line(r, judges))
     for line in (*skipped, *errors):
         typer.echo(f"  {line}")
+
+
+bench_app = typer.Typer(help="Benchmark commands", no_args_is_help=True)
+app.add_typer(bench_app, name="bench")
+
+
+@bench_app.command("add")
+def bench_add(
+    from_job: Annotated[str, typer.Option("--from-job", help="Merged job: uuid or <app>:<seq>")],
+    suite: Annotated[str, typer.Option("--suite", help="Benchmark suite name")],
+    name: Annotated[str | None, typer.Option("--name", help="Task name")] = None,
+    scorer: Annotated[
+        list[str] | None, typer.Option("--scorer", help="Scorer to run on the task (repeatable)")
+    ] = None,
+    check_command: Annotated[
+        str | None, typer.Option("--check-command", help="Command with {file} to run each check")
+    ] = None,
+):
+    """Add a benchmark task, with hidden checks, from a merged job."""
+    ref = _norm_ref(from_job)
+    out = _api_call(
+        lambda c: c.add_bench_task(
+            ref, suite, name=name, scorers=scorer, check_command=check_command
+        )
+    )
+    save = out["save"]
+    where = save.get("pr_url") or (save.get("sha") or "")[:12]
+    typer.echo(f"added task {out['task']} to suite {out['suite']} ({save.get('mode')}: {where})")
+    if save.get("mode") == "pr":
+        typer.echo("merge the pull request, then the definition syncs")
+
+
+@bench_app.command("seed")
+def bench_seed(suite: Annotated[str, typer.Argument(help="Benchmark suite name")]):
+    """Import a suite's repo.bundle into the local repos directory (run in the orchestrator)."""
+    from swfactory.bench.tasks import seed_bench_repo
+    from swfactory.definition.loader import defaults_dir
+
+    settings = get_settings()
+    roots = [Path(settings.definition_source)] if settings.definition_source else []
+    roots.append(defaults_dir())
+    bundle = next(
+        (
+            r / "benchmarks" / suite / "repo.bundle"
+            for r in roots
+            if (r / "benchmarks" / suite / "repo.bundle").is_file()
+        ),
+        None,
+    )
+    if bundle is None:
+        typer.echo(f"no repo.bundle for suite '{suite}'")
+        raise typer.Exit(1)
+    try:
+        bare = seed_bench_repo(suite, bundle, Path(settings.repos_dir))
+    except (OSError, RuntimeError) as e:
+        typer.echo(f"seed failed: {e}")
+        raise typer.Exit(1) from None
+    import subprocess
+
+    from swfactory.gitops.service import safe_git
+
+    refs = subprocess.run(
+        safe_git("-C", str(bare), "for-each-ref", "--format=%(refname)", "refs/heads/base-*"),
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.split()
+    typer.echo(f"seeded {suite}: {len(refs)} base commits")
+
+
+def _estimate_line(est: dict[str, Any], budget: Decimal | None) -> str:
+    cap = budget if budget is not None else est.get("budget_usd")
+    cap_text = f"budget cap ${Decimal(str(cap)):.2f}" if cap is not None else "no budget cap"
+    return (
+        f"{est['trials']} trials \u00b7 estimated ${Decimal(est['estimate_usd']):.2f} "
+        f"(up to ${Decimal(est['max_usd']):.2f}) \u00b7 {cap_text}"
+    )
+
+
+@bench_app.command("estimate")
+def bench_estimate(
+    suite: Annotated[str, typer.Argument(help="Benchmark suite name")],
+    config: Annotated[
+        list[str] | None, typer.Option("--config", help="Configuration to run (repeatable)")
+    ] = None,
+    repetitions: Annotated[int, typer.Option("--repetitions", min=1, help="Runs per trial")] = 1,
+):
+    """Show what a benchmark run would cost, without starting it."""
+    est = _api_call(lambda c: c.bench_estimate(suite, configs=config, repetitions=repetitions))
+    typer.echo(_estimate_line(est, None))
+    for name, usd in est.get("per_config", {}).items():
+        typer.echo(f"  {name}: ${Decimal(usd):.2f} ({est.get('basis', {}).get(name, '')})")
+
+
+@bench_app.command("run")
+def bench_run(
+    suite: Annotated[str, typer.Argument(help="Benchmark suite name")],
+    config: Annotated[
+        list[str] | None, typer.Option("--config", help="Configuration to run (repeatable)")
+    ] = None,
+    repetitions: Annotated[int, typer.Option("--repetitions", min=1, help="Runs per trial")] = 1,
+    budget: Annotated[
+        Decimal | None, typer.Option("--budget", help="Run budget cap in USD")
+    ] = None,
+    definition: Annotated[
+        str | None, typer.Option("--definition", help="Definition sha to run under")
+    ] = None,
+    yes: Annotated[bool, typer.Option("--yes", help="Start without asking")] = False,
+):
+    """Start a benchmark run after showing its estimate."""
+    est = _api_call(lambda c: c.bench_estimate(suite, configs=config, repetitions=repetitions))
+    typer.echo(_estimate_line(est, budget))
+    if not yes and not typer.confirm("Start this run?"):
+        typer.echo("not started")
+        raise typer.Exit(1)
+    out = _api_call(
+        lambda c: c.bench_run(
+            suite,
+            accept_estimate_usd=est["estimate_usd"],
+            configs=config,
+            repetitions=repetitions,
+            budget=budget,
+            definition=definition,
+        )
+    )
+    typer.echo(f"started bench run {out['run_id']}")
+
+
+@bench_app.command("list")
+def bench_list():
+    """List benchmark suites and runs."""
+    suites = _api_call(lambda c: c.bench_suites())
+    runs = _api_call(lambda c: c.bench_runs())
+    typer.echo("Suites")
+    for su in suites:
+        cfgs = ", ".join(su["configurations"])
+        typer.echo(f"  {su['name']}  {su['tasks']} tasks  [{cfgs}]  budget ${su['budget_usd']}")
+    typer.echo("Runs")
+    for r in runs:
+        spent = f"${Decimal(r['cost_usd']):.2f}"
+        cap = f"${Decimal(r['budget_usd']):.2f}" if r.get("budget_usd") else "no cap"
+        typer.echo(f"  {r['id']}  {r['suite']}  {r['status']}  {spent} of {cap}")
+
+
+def _pct(v: float | None) -> str:
+    return "-" if v is None else f"{v:.2f}"
+
+
+def report_lines(rep: dict[str, Any]) -> list[str]:
+    """The per-configuration table and the recommendation of a bench report."""
+    lines = [
+        f"Run {rep['id']} - suite {rep['suite']} - {rep['status']} - "
+        f"spent ${Decimal(rep['cost_usd']):.2f} of ${Decimal(rep['budget_usd']):.2f}",
+        f"{'config':<14}{'hidden pass':<28}{'judge (not ranked)':<20}{'rounds':<8}"
+        f"{'cost/task':<11}{'time':<8}not run",
+    ]
+    for c in rep["configs"]:
+        iv = c.get("hidden_pass_interval")
+        hidden = "-"
+        if c["hidden_pass_rate"] is not None and iv:
+            hidden = f"{c['hidden_pass_rate']:.2f} (n={c['completed']}, {iv[0]:.2f}-{iv[1]:.2f})"
+        judge = _pct(c["judge_pass_rate"])
+        if c.get("judge_pass_rate_uncalibrated") is not None:
+            judge += f" (not counted: {c['judge_pass_rate_uncalibrated']:.2f})"
+        cost = "-" if c["mean_cost_usd"] is None else f"${Decimal(c['mean_cost_usd']):.2f}"
+        dur = c["median_duration_s"]
+        rounds = "-" if c["mean_rounds"] is None else f"{c['mean_rounds']:.1f}"
+        lines.append(
+            f"{c['name']:<14}{hidden:<28}{judge:<20}{rounds:<8}{cost:<11}"
+            f"{'-' if dur is None else f'{dur:.0f}s':<8}{c['not_run']}"
+        )
+    for t in rep.get("invalid_tasks", []):
+        why = (rep.get("invalid_reasons") or {}).get(t)
+        lines.append(f"invalid task {t}" + (f": {why}" if why else ""))
+    if rep["recommended"]:
+        lines.append(f"Recommended: {rep['recommendation_reason']}")
+    else:
+        lines.append(f"Recommended: none ({rep['recommendation_reason']})")
+    return lines
+
+
+@bench_app.command("report")
+def bench_report(
+    run: Annotated[str, typer.Argument(help="Benchmark run id")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print the report as JSON")] = False,
+):
+    """Show a benchmark run's per-configuration report and recommendation."""
+    rep = _api_call(lambda c: c.bench_report(run))
+    if as_json:
+        typer.echo(json.dumps(rep, indent=2))
+        return
+    for line in report_lines(rep):
+        typer.echo(line)
 
 
 @score_app.command("label")

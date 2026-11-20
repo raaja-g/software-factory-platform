@@ -29,6 +29,9 @@ class FakeWriter:
         self.lock_once = lock_once
         self.attempts = 0
 
+    async def save_files(self, files, *, message, author):
+        raise NotImplementedError
+
     async def save_file(self, path, content, *, message, author):
         self.attempts += 1
         if self.lock_once and self.attempts == 1:

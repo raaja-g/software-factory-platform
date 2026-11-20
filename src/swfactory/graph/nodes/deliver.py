@@ -75,6 +75,8 @@ def make(deps: Deps):
 
     async def deliver(state: JobState) -> Command:
         job_id = job_uuid(state)
+        if state.get("kind") == "benchmark":  # a benchmark trial is never delivered
+            return Command(goto="finalize", update={"outcome": Stage.CLOSED.value})
         await enter_stage(deps, job_id, Stage.DELIVERING)
         job, defn, app = await pinned_definition(deps, job_id)
         box = await job_sandbox(deps, job_id)

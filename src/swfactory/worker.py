@@ -962,6 +962,23 @@ async def _scheduler_loop(deps: Deps, interval_s: float | None = None) -> None:
         await asyncio.sleep(interval_s or SCHEDULER_TICK_S)
 
 
+BENCH_TICK_S = 30.0
+
+
+async def _bench_loop(deps: Deps, interval_s: float = BENCH_TICK_S) -> None:
+    from swfactory.bench.runner import BenchRunner
+
+    bench = BenchRunner(deps.sessions, deps.definitions)
+    while True:
+        try:
+            started = await bench.tick(datetime.now(UTC))
+            if started:
+                log.info("bench.trials_started", jobs=[str(j) for j in started])
+        except Exception as exc:
+            log.warning("bench.tick_failed", error=repr(exc))
+        await asyncio.sleep(interval_s)
+
+
 RUN_REQUEST_TICK_S = 2.0
 
 
@@ -1137,6 +1154,7 @@ async def _loop(
     runner = asyncio.create_task(run_request_loop(deps, worker_id))
     scorer_loop = asyncio.create_task(score_request_loop(deps, worker_id))
     scheduler = asyncio.create_task(_scheduler_loop(deps))
+    bencher = asyncio.create_task(_bench_loop(deps))
     nightly = asyncio.create_task(_nightly_loop(deps, settings))
     github_poller = asyncio.create_task(_github_poll_loop(deps, settings))
     definition_sync = make_definition_sync(deps, settings)
@@ -1215,6 +1233,7 @@ async def _loop(
         runner.cancel()
         scorer_loop.cancel()
         scheduler.cancel()
+        bencher.cancel()
         nightly.cancel()
         github_poller.cancel()
         for t in sync_tasks:
@@ -1233,6 +1252,7 @@ async def _loop(
             runner,
             scorer_loop,
             scheduler,
+            bencher,
             nightly,
             github_poller,
             *sync_tasks,

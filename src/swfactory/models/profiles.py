@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
 
 from swfactory.domain.types import EngineSupport, Role, SelectionMode
 
 if TYPE_CHECKING:
-    from swfactory.definition.models import AppDef, Definition, Profile
+    from swfactory.definition.models import AppDef, Definition, Profile, RoleOverride
     from swfactory.models.catalog import ModelInfo
 
 _OPENAI_O = re.compile(r"^o\d")
@@ -86,8 +86,11 @@ def resolve_profile(
     *,
     override: str | None,
     triage_profile: str | None,
+    role_overrides: Mapping[Role, RoleOverride] | None = None,
 ) -> tuple[ResolvedProfile, str]:
-    """Pick the profile: override, then triage (if the app allows it), app, global."""
+    """Pick the profile: override, then triage (if the app allows it), app, global.
+
+    ``role_overrides`` (benchmark configurations) replace each set field of a role's model."""
     if override is not None:
         name, source = override, "override"
     elif triage_profile is not None and triage_profile in app.allowed_profiles:
@@ -101,6 +104,20 @@ def resolve_profile(
     resolved = ResolvedProfile.from_def(
         name, defn.profiles[name], default_continuity=defn.factory.defaults.builder_continuity
     )
+    if role_overrides:
+        roles = dict(resolved.roles)
+        for role, ov in role_overrides.items():
+            try:
+                base = resolved.for_role(role)
+            except KeyError:
+                continue
+            changes = {
+                k: v
+                for k, v in (("engine", ov.engine), ("model", ov.model), ("mode", ov.mode))
+                if v is not None
+            }
+            roles[role] = replace(base, **changes)
+        resolved = replace(resolved, roles=MappingProxyType(roles))
     return resolved, source
 
 

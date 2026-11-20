@@ -307,6 +307,27 @@ class GitHubClient:
             f"{self._p}/commits", {"sha": branch, "since": _iso(since), "per_page": 100}
         )
 
+    async def get_commit(self, sha: str) -> dict[str, Any]:
+        return (await self._read("GET", f"{self._p}/commits/{sha}")).json()
+
+    async def compare_files(self, base: str, head: str) -> list[dict[str, Any]]:
+        """Files changed between two commits (the compare API lists at most 300)."""
+        r = await self._read("GET", f"{self._p}/compare/{base}...{head}", params={"per_page": 100})
+        return list(r.json().get("files", []))
+
+    async def get_file_content(self, path: str, ref: str) -> str | None:
+        """Base64 content of a file at ``ref``, or None when it is not a file there."""
+        try:
+            r = await self._read("GET", f"{self._p}/contents/{path}", params={"ref": ref})
+        except GitHubError as e:
+            if e.status == 404:
+                return None
+            raise
+        body = r.json()
+        if not isinstance(body, dict) or body.get("encoding") != "base64":
+            return None
+        return str(body.get("content", ""))
+
     async def get_pr(self, number: int) -> PullRef:
         return _pull((await self._read("GET", f"{self._p}/pulls/{number}")).json())
 

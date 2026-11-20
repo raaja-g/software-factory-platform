@@ -20,12 +20,19 @@ def handler_of(name):
 
 def test_error_handler_routes_to_gate():
     cmd = make_error_handler("build")(state, RuntimeError("x"))  # type: ignore[arg-type]
-    assert (cmd.goto, cmd.update) == ("human_gate", failure_update("build"))
+    assert (cmd.goto, cmd.update) == (
+        "human_gate",
+        {**failure_update("build"), "gate_scope": None},
+    )
 
 
 def test_review_failure_retries_verify():
     cmd = make_error_handler("review")(state, RuntimeError("x"))  # type: ignore[arg-type]
-    assert cmd.update == {"gate_reason": "step failed: review", "retry_node": "verify"}
+    assert cmd.update == {
+        "gate_reason": "step failed: review",
+        "retry_node": "verify",
+        "gate_scope": None,
+    }
 
 
 def test_every_node_has_an_error_handler():

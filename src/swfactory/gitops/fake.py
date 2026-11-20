@@ -52,7 +52,9 @@ class FakeGitService(GitService):
             return json.loads(self.state_path.read_text())["delivered"]
         return {}
 
-    async def prepare(self, job: Job, app: AppDef, box: Sandbox) -> str:
+    async def prepare(
+        self, job: Job, app: AppDef, box: Sandbox, *, merge_sha: str | None = None
+    ) -> str:
         self._call("prepare")
         seq, slug = getattr(job, "seq", None), getattr(job, "slug", None)
         replies = getattr(box, "git_replies", None)
