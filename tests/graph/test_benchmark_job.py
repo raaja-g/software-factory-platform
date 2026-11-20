@@ -248,11 +248,14 @@ async def test_hidden_checks_run_each_file_in_isolated_box(env):
     assert sb.isolated_names[-1] == "hidden-checks"
     assert iso.files["/work/repo/tests/test_browser.py"].decode() == HIDDEN_TEST_BROWSER
     assert iso.files["/work/repo/tests/test_web.py"].decode() == HIDDEN_TEST_WEB
-    assert iso.exec_calls == [
-        ["bash", "-lc", "python3 -m unittest -q tests/test_browser.py"],
-        ["bash", "-lc", "python3 -m unittest -q tests/test_web.py"],
+    assert iso.exec_calls[0][0] == "find"  # the tree is sanitized first
+    checks = [
+        (c, t) for c, t in zip(iso.exec_calls, iso.exec_timeouts, strict=True) if c[0] == "bash"
     ]
-    assert iso.exec_timeouts == [900, 900]
+    assert checks == [
+        (["bash", "-c", "python3 -m unittest -q tests/test_browser.py"], 900),
+        (["bash", "-c", "python3 -m unittest -q tests/test_web.py"], 900),
+    ]
     job_box = sb.boxes.get(UUID(str(r.state["job_id"])))
     assert job_box is None or "/work/repo/tests/test_web.py" not in job_box.files
     row = await result_row(env.sessions, r.job)

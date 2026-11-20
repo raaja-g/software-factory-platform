@@ -22,6 +22,7 @@ from swfactory.bench.reference import (
     reference_source_ref,
     task_check_key,
 )
+from swfactory.bench.sanitize import sanitize_tree
 from swfactory.bench.tasks import app_for_repo
 from swfactory.costs.pricing import STEP_MIN_USD
 from swfactory.db.repo import JobRefError, calibration_table, resolve_job_ref
@@ -502,10 +503,13 @@ class HiddenResult:
     files: Mapping[str, int | None]
     base_files: Mapping[str, int | None]
     error: str | None
+    sanitized: tuple[str, ...] = ()  # paths the sanitizer took out of the agent's tree
 
 
 def _detail(res: HiddenResult) -> str:
     out: dict[str, Any] = {"files": dict(res.files)}
+    if res.sanitized:
+        out["sanitized"] = list(res.sanitized)
     if res.base_files:
         out["base_files"] = dict(res.base_files)
     if res.error is not None:
@@ -534,7 +538,7 @@ async def _run_files(box: Any, task: BenchTaskDef, paths: Sequence[str], out: li
     codes: dict[str, int | None] = {}
     for path in paths:
         cmd = task.check_command.replace("{file}", shlex.quote(path))
-        res = await box.exec(["bash", "-lc", cmd], cwd=REPO, timeout_s=TEST_TIMEOUT_S)
+        res = await box.exec(["bash", "-c", cmd], cwd=REPO, timeout_s=TEST_TIMEOUT_S)
         codes[path] = res.exit_code
         out.append(f"$ {cmd}\n# exit {res.exit_code}\n{res.stdout}{res.stderr}")
     return codes
@@ -553,7 +557,11 @@ async def run_hidden_checks(
     """Run the task's check files, one by one, in a sanitized copy of the verified tree.
 
     Never raises. The builder's checkout is never written; the command is the task's own
-    ``check_command``, so nothing the builder wrote can decide which tests run.
+    ``check_command``. The copy is what the agent committed, so before the check files are
+    written ``sanitize_tree`` restores or removes the files that could take over the test runner
+    (see there, including what it leaves alone); what it changed is recorded in the result, the
+    ``hidden_detail`` JSON (``"sanitized"``) and the log, and does not by itself fail the trial.
+    The command runs under a plain ``bash -c``: no login profile of the box is read.
     """
     try:
         if not fresh and not await _has_verified_build(deps, job_id):
@@ -569,9 +577,12 @@ async def run_hidden_checks(
     logs: list[str] = []
     files: dict[str, int | None] = {}
     base_files: dict[str, int | None] = {}
+    sanitized: list[str] = []
     try:
         paths = sorted(task.check_files)
         async with await _checks_box(deps, job_id, runner, fresh) as iso:
+            sanitized = await sanitize_tree(iso, task.base_sha, set(task.check_files))
+            logs.extend(f"sanitized: {path}" for path in sanitized)
             for path in paths:
                 await iso.write_text(f"{REPO}/{path}", task.check_files[path])
             files = await _run_files(iso, task, paths, logs)
@@ -588,10 +599,12 @@ async def run_hidden_checks(
                     await iso.write_text(f"{REPO}/{path}", task.check_files[path])
                 base_files = await _run_files(iso, task, paths, logs)
         passed = bool(files) and all(code == 0 for code in files.values())
-        result = HiddenResult(passed, files, base_files, None)
+        result = HiddenResult(passed, files, base_files, None, tuple(sanitized))
     except Exception as exc:
         log.warning("bench.hidden_checks_failed", job_id=str(job_id), error=str(exc))
-        result = HiddenResult(None, files, base_files, f"hidden checks could not run: {exc}")
+        result = HiddenResult(
+            None, files, base_files, f"hidden checks could not run: {exc}", tuple(sanitized)
+        )
     return await _store(deps, job_id, result, logs, log_path)
 
 
