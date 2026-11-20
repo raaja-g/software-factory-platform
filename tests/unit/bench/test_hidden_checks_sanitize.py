@@ -177,7 +177,9 @@ async def test_real_sanitizer_is_wired_in_and_does_not_disturb_the_fake_box(monk
     res = await run(deps)
     box = deps.sandboxes.isolated_boxes[HIDDEN_CHECKS_BOX]
     assert res.passed is True and res.sanitized == ()
-    assert box.exec_calls[0][0] == "find"
+    # the normalisation reads the base tree first, then everything is looked at with `find -P`
+    assert box.exec_calls[0][0] == "git" and "ls-tree" in box.exec_calls[0]
+    assert ["find", "-P"] in [c[:2] for c in box.exec_calls]
     assert [c for c in box.exec_calls if c[0] == "bash"] == [
         ["bash", "-c", "python3 -m unittest -q tests/test_a.py"],
         ["bash", "-c", "python3 -m unittest -q tests/test_b.py"],

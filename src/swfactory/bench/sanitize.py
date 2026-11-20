@@ -29,6 +29,27 @@ names (``test``, ``tests``, ``src``, ``docs``, ``utils``, ``helpers``, ``fixture
 badly packaged distributions sometimes also install. A ``.venv`` that git tracks is never run:
 it is the agent's code.
 
+*Normalisation* runs first, before check files are written and before anything is scanned. The
+scan below is ``find``, which does not follow a symlink given as a start point and cannot tell a
+link from a file, while python follows a linked directory on ``sys.path`` and pytest asks
+``Path.is_file()`` (which follows a link, and is false for a dangling one) about ``__init__.py``.
+Left alone, the agent could commit ``src`` (or ``tests``, a parent of a check file, the check
+file's own directory) as a symlink to a directory of its own holding ``pluggy.py``: the scan sees
+nothing, python imports the shadow, and the platform's write of the check files would land in
+the agent's space. Or it could commit a dangling ``__init__.py`` link so the sanitizer's idea of
+the basedir differs from pytest's and the real one is never scanned. Scanning every ancestor as
+an import root would close that too, but deletes honest files (``app/types.py``), so the
+control is taken away instead: for ``src`` and every directory from the repo root down to a
+check file's own directory, a symlink is removed (restored from `base_sha` when the base has
+that directory, otherwise left absent for the platform to create as a real one), a check file
+that is a link is removed the same way, and an ``__init__.py`` that is not a regular file (any
+link, a directory, a fifo) is removed and restored from the base if the base has a regular file
+there. Afterwards ``-type f`` is exactly pytest's ``is_file``, and the basedir walk also stops at
+a directory whose name is not an identifier, as pytest's package walk does. Every ``find`` runs
+with ``-P`` (never follow), and the sanitizer refuses (``RuntimeError``, fail closed) if an
+import root or a directory on the way to a check file is still a link or resolves outside the
+repo. Links elsewhere in the tree (``docs/latest -> v1``) are not on an import path and are left.
+
 *Import roots* are where such a file would be found at the top level: the repo root; ``src/`` if it
 exists; for every check file (`keep` path) its own directory (``python path/to/check.py`` puts the
 script directory first) and the directory pytest puts first for it, the first directory upward
@@ -43,7 +64,8 @@ An entry of a root (file, package, namespace directory, link) whose import name 
 is ``pluggy``) is handled like the fixed takeover names: restored from the commit `base_sha` when
 that commit has it (a directory: its tracked files are restored and anything else in it is
 deleted, so an unchanged legitimate file stays as it is and is not reported), and deleted when it
-does not. Paths in `keep` are never touched. Returns the relative paths it changed, sorted.
+does not. Paths in `keep` are never touched, except a check path that is itself a symlink
+(removed, see above). Returns the relative paths it changed, sorted.
 
 The trade-off: a job's legitimately added root-level module that is named like a standard library
 or installed module (``packaging.py``, ``json.py``) is removed. It would shadow the real module
@@ -191,12 +213,107 @@ async def sanitize_tree(box: Any, base_sha: str, keep: Collection[str]) -> list[
     for k in kept:
         if k.startswith(("/", "..")) or k == ".":
             raise RuntimeError(f"check path is not inside the repo: {k!r}")
+    changed = await _normalise(box, base_sha, kept)
     protected = await _protected_names(box)
     tree = _Tree(box, base_sha, kept)
-    changed = await tree.undo(await _candidates(box))
+    changed |= await tree.undo(await _candidates(box))
     roots = await _import_roots(box, kept)
+    await _verify(box, roots, kept)
     changed |= await tree.undo(await _shadows(box, roots, protected))
     return sorted(changed)
+
+
+async def _normalise(box: Any, base_sha: str, kept: Collection[str]) -> set[str]:
+    """Take the attacker's control over the path layout away, before anything else looks at it.
+
+    Python follows a symlink given as a directory and pytest asks ``Path.is_file()`` about
+    ``__init__.py``, while ``find`` neither follows a start-point link nor tells a link from a
+    file. So on the way to every check file, and for ``src``: a directory that is a symlink is
+    removed (and, when the base commit has that directory, its tracked files are restored from
+    it; otherwise it stays absent and the platform's write of the check files creates a real one),
+    a check file that is a symlink is removed the same way, and an ``__init__.py`` that is not a
+    regular file (any link, a directory, a fifo) is removed and restored from the base when the
+    base has a regular file there. Returns what it changed.
+    """
+    modes = await _base_modes(box, base_sha)
+    dirs = await _path_dirs(box, kept)
+    changed: set[str] = set()
+    for directory in dirs:  # top-down: a link is gone before anything below it is looked at
+        if await _is_link(box, directory):
+            await _replace(box, base_sha, directory, modes, directory=True)
+            changed.add(directory)
+    for check in sorted(kept):
+        if await _is_link(box, check):
+            await _replace(box, base_sha, check, modes, directory=False)
+            changed.add(check)
+    for directory in dirs:
+        if await _exists(box, directory, "__init__.py", "!", "-type", "f"):
+            init = f"{directory}/__init__.py"
+            await _replace(box, base_sha, init, modes, directory=False)
+            changed.add(init)
+    return changed
+
+
+async def _path_dirs(box: Any, kept: Collection[str]) -> list[str]:
+    """The directories whose layout decides the import roots, shallowest first: every ancestor of
+    a check file (the repo root excluded) and ``src``."""
+    dirs: set[str] = {"src"}
+    for path in kept:
+        parts = PurePosixPath(path).parts
+        dirs.update("/".join(parts[:i]) for i in range(1, len(parts)))
+    return sorted(dirs, key=lambda d: (d.count("/"), d))
+
+
+async def _replace(
+    box: Any, base_sha: str, path: str, modes: dict[str, str], *, directory: bool
+) -> None:
+    """Remove `path` (never following it) and put back what the base commit has there: the
+    tracked files below it for a directory, a regular file for a file; nothing otherwise."""
+    await _run(box, ["rm", "-rf", "--", f"./{path}"], f"remove {path}")
+    if directory:
+        restore = [f for f in modes if f.startswith(path + "/")]
+    else:
+        restore = [path] if modes.get(path, "").startswith("100") else []
+    for start in range(0, len(restore), CHUNK):
+        await _run(
+            box,
+            safe_git(
+                "--literal-pathspecs", "checkout", base_sha, "--", *restore[start : start + CHUNK]
+            ),
+            f"restore {path}",
+            env=SAFE_GIT_ENV,
+        )
+
+
+async def _base_modes(box: Any, base_sha: str) -> dict[str, str]:
+    """Every tracked path of the base commit with its git mode (``100644``, ``120000`` ...)."""
+    raw = await _run(
+        box, safe_git("ls-tree", "-r", "-z", base_sha), "list the base commit", env=SAFE_GIT_ENV
+    )
+    modes: dict[str, str] = {}
+    for entry in raw.split("\0"):
+        if not entry:
+            continue
+        meta, _, name = entry.partition("\t")
+        if "�" in name:
+            raise RuntimeError(f"cannot sanitize a path that is not valid UTF-8: {name!r}")
+        modes[posixpath.normpath(name)] = meta.split(" ", 1)[0]
+    return modes
+
+
+async def _verify(box: Any, roots: Sequence[str], kept: Collection[str]) -> None:
+    """Fail closed when, after the normalisation, an import root or anything on the way to a check
+    file is still a link or resolves outside the repo."""
+    real_repo = (await _run(box, ["realpath", "--", "."], "resolve the repo")).rstrip("\n")
+    paths = {*roots, *kept, *await _path_dirs(box, kept)} - {"."}
+    for path in sorted(paths):
+        if not await _present(box, path):
+            continue
+        if await _is_link(box, path):
+            raise RuntimeError(f"{path} is still a symlink after the normalisation")
+        real = (await _run(box, ["realpath", "--", f"./{path}"], f"resolve {path}")).rstrip("\n")
+        if real != real_repo and not real.startswith(real_repo + "/"):
+            raise RuntimeError(f"{path} resolves outside the repo: {real}")
 
 
 class _Tree:
@@ -244,7 +361,7 @@ class _Tree:
         wanted = {*restore, *protected}
         listing = await _run(
             box,
-            ["find", f"./{path}", "(", "-type", "f", "-o", "-type", "l", ")", "-print0"],
+            ["find", "-P", f"./{path}", "(", "-type", "f", "-o", "-type", "l", ")", "-print0"],
             f"list {path}",
         )
         for extra in _paths(listing):
@@ -265,7 +382,9 @@ class _Tree:
             did = True
         # empty directories left behind are not worth keeping (an empty `pytest/` is a package)
         await box.exec(
-            ["find", f"./{path}", "-type", "d", "-empty", "-delete"], cwd=REPO, timeout_s=TIMEOUT_S
+            ["find", "-P", f"./{path}", "-type", "d", "-empty", "-delete"],
+            cwd=REPO,
+            timeout_s=TIMEOUT_S,
         )
         return did
 
@@ -296,29 +415,47 @@ async def _protected_names(box: Any) -> frozenset[str]:
     return frozenset(names)
 
 
-async def _exists(box: Any, directory: str, name: str) -> bool:
-    argv = ["find", f"./{directory}", "-maxdepth", "1", "-name", name, "-print", "-quit"]
-    res = await box.exec(argv, cwd=REPO, timeout_s=TIMEOUT_S)
+async def _find(box: Any, argv: list[str], where: str) -> bool:
+    """Whether a ``find -P`` (never following a link) prints anything; a missing path is no."""
+    res = await box.exec(["find", "-P", *argv, "-print", "-quit"], cwd=REPO, timeout_s=TIMEOUT_S)
     if res.exit_code != 0:
-        if "No such file" in res.stderr:
+        if "No such file" in res.stderr or "Not a directory" in res.stderr:
             return False
-        raise RuntimeError(f"sanitizer could not look in {directory}: {res.stderr.strip()}")
+        raise RuntimeError(f"sanitizer could not look at {where}: {res.stderr.strip()}")
     return bool(res.stdout.strip())
+
+
+async def _exists(box: Any, directory: str, name: str, *tests: str) -> bool:
+    argv = [f"./{directory}", "-maxdepth", "1", "-name", name, *tests]
+    return await _find(box, argv, directory)
+
+
+async def _is_link(box: Any, path: str) -> bool:
+    """Whether `path` itself is a symlink (judged by lstat, a dangling one included)."""
+    return await _find(box, [f"./{path}", "-maxdepth", "0", "-type", "l"], path)
+
+
+async def _present(box: Any, path: str) -> bool:
+    return await _find(box, [f"./{path}", "-maxdepth", "0"], path)
 
 
 async def _import_roots(box: Any, kept: Collection[str]) -> list[str]:
     """Directories (relative to the repo, `.` is the root) whose top level `sys.path` may start
     with when the checks run."""
     roots: set[str] = {"."}
-    if await _exists(box, ".", "src"):
+    if await _exists(box, ".", "src", "-type", "d"):
         roots.add("src")
     inits: dict[str, bool] = {}
 
     async def basedir(directory: str) -> str:
-        """The first directory upward from `directory` without an __init__.py (pytest prepend)."""
+        """The directory pytest (prepend) puts on ``sys.path``: the first one upward from
+        `directory` without a regular-file __init__.py, or whose name is not an identifier (the
+        package walk, ``resolve_package_path``, stops there as well)."""
         while directory != ".":
+            if not posixpath.basename(directory).isidentifier():
+                return directory
             if directory not in inits:
-                inits[directory] = await _exists(box, directory, "__init__.py")
+                inits[directory] = await _exists(box, directory, "__init__.py", "-type", "f")
             if not inits[directory]:
                 return directory
             directory = posixpath.dirname(directory) or "."
@@ -359,7 +496,9 @@ async def _shadows(box: Any, roots: Sequence[str], protected: frozenset[str]) ->
     """Top-level entries of the import roots whose import name is a protected module."""
     found: list[str] = []
     for root in roots:
-        base = ["find", f"./{root}", "-mindepth", "1", "-maxdepth", "1"]
+        if not await _present(box, root):  # a check's directory is created when it is written
+            continue
+        base = ["find", "-P", f"./{root}", "-mindepth", "1", "-maxdepth", "1"]
         dirs = _paths(
             await _run(
                 box, [*base, "(", "-type", "d", "-o", "-type", "l", ")", "-print0"], f"scan {root}"
@@ -387,7 +526,7 @@ def _name_test() -> list[str]:
 
 async def _candidates(box: Any) -> list[str]:
     """Every takeover candidate under the tree, relative to it (`.git` is never entered)."""
-    argv = ["find", ".", "-name", ".git", "-prune", "-o", *_name_test(), "-print0", "-prune"]
+    argv = ["find", "-P", ".", "-name", ".git", "-prune", "-o", *_name_test(), "-print0", "-prune"]
     return _paths(await _run(box, argv, "scan the tree"))
 
 

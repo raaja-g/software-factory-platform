@@ -131,13 +131,14 @@ def loop(sessions):
 
 
 @pytest.fixture(autouse=True)
-def _fake_box_cannot_run_python_discovery(monkeypatch):
-    """The hidden-checks sanitizer asks the box's python which module names are protected. A fake
-    box runs no python (and answers exit 0 to `test -x .venv/bin/python`), so stub that discovery;
-    it is tested on real processes in tests/unit/bench/test_sanitize_shadow.py."""
-    from swfactory.bench import sanitize
+def _fake_box_cannot_be_sanitized(monkeypatch):
+    """The hidden-checks sanitizer runs git, find, realpath and python inside the checks box and
+    checks the answers. A fake box answers exit 0 to everything and hands out scripted results in
+    order, so the sanitizer cannot run on it (and would eat results meant for the checks). These
+    graph tests are about the graph; the sanitizer is tested on real processes in
+    tests/unit/bench/test_sanitize_*.py and its wiring in test_hidden_checks_sanitize.py."""
 
-    async def discovered(box):
-        return frozenset({"pluggy", "json", "pytest"})
+    async def no_changes(box, base_sha, keep):
+        return []
 
-    monkeypatch.setattr(sanitize, "_protected_names", discovered)
+    monkeypatch.setattr("swfactory.bench.runner.sanitize_tree", no_changes)

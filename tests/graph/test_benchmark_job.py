@@ -248,7 +248,7 @@ async def test_hidden_checks_run_each_file_in_isolated_box(env):
     assert sb.isolated_names[-1] == "hidden-checks"
     assert iso.files["/work/repo/tests/test_browser.py"].decode() == HIDDEN_TEST_BROWSER
     assert iso.files["/work/repo/tests/test_web.py"].decode() == HIDDEN_TEST_WEB
-    assert iso.exec_calls[0][0] == "find"  # the tree is sanitized first
+    assert iso.exec_calls[0][0] == "bash"  # the sanitizer is stubbed here: first call is a check
     checks = [
         (c, t) for c, t in zip(iso.exec_calls, iso.exec_timeouts, strict=True) if c[0] == "bash"
     ]
