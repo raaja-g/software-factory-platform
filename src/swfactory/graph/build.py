@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+import structlog
 from langchain_core.runnables import RunnableConfig
 from langgraph.errors import NodeError
 from langgraph.graph import END, START, StateGraph
@@ -37,6 +38,8 @@ from swfactory.graph.nodes import requirements as req_nodes
 from swfactory.graph.routing import failure_update
 from swfactory.graph.state import JobState, ReviewTask
 from swfactory.graph.steps import step_budget_s
+
+log = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -113,6 +116,15 @@ def make_error_handler(
         cause = error.error if isinstance(error, NodeError) else error
         if isinstance(cause, LeaseLost):  # never write a gate into a thread another worker drives
             raise cause
+        # say why the step failed: the gate reason only names the node. The message is truncated
+        # and goes through the log redaction like every other line.
+        log.warning(
+            "node.failed",
+            node=node,
+            job_id=state.get("job_id"),
+            cause=type(cause).__name__,
+            detail=str(cause)[:300],
+        )
         benchmark = state.get("kind") == "benchmark"
         # L13, L14: scoring never reaches a person; finalize runs after the outcome. A benchmark
         # job's failed finalize goes to the gate, which ends the job failed (never an interrupt).

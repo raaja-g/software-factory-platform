@@ -1,0 +1,25 @@
+state,touches_ui
+"{""app"": ""demo"", ""feature"": ""Add a dark mode toggle (variant 0)"", ""title"": ""Add a dark mode toggle""}",A
+"{""app"": ""demo"", ""feature"": ""Bump the postgres client library (variant 0)"", ""title"": ""Bump the postgres client library""}",B
+"{""app"": ""demo"", ""feature"": ""Fix the button alignment on the login page (variant 1)"", ""title"": ""Fix the button alignment on the login page""}",A
+"{""app"": ""demo"", ""feature"": ""Add a retry to the queue worker (variant 1)"", ""title"": ""Add a retry to the queue worker""}",B
+"{""app"": ""demo"", ""feature"": ""Make the sidebar collapsible (variant 2)"", ""title"": ""Make the sidebar collapsible""}",A
+"{""app"": ""demo"", ""feature"": ""Speed up the export command (variant 2)"", ""title"": ""Speed up the export command""}",B
+"{""app"": ""demo"", ""feature"": ""Add a loading spinner to the dashboard (variant 3)"", ""title"": ""Add a loading spinner to the dashboard""}",A
+"{""app"": ""demo"", ""feature"": ""Fix a typo in the README (variant 3)"", ""title"": ""Fix a typo in the README""}",B
+"{""app"": ""demo"", ""feature"": ""Redesign the settings page layout (variant 4)"", ""title"": ""Redesign the settings page layout""}",A
+"{""app"": ""demo"", ""feature"": ""Rotate the log files daily (variant 4)"", ""title"": ""Rotate the log files daily""}",B
+"{""app"": ""demo"", ""feature"": ""Add a dark mode toggle (variant 5)"", ""title"": ""Add a dark mode toggle""}",A
+"{""app"": ""demo"", ""feature"": ""Bump the postgres client library (variant 5)"", ""title"": ""Bump the postgres client library""}",B
+"{""app"": ""demo"", ""feature"": ""Fix the button alignment on the login page (variant 6)"", ""title"": ""Fix the button alignment on the login page""}",A
+"{""app"": ""demo"", ""feature"": ""Add a retry to the queue worker (variant 6)"", ""title"": ""Add a retry to the queue worker""}",B
+"{""app"": ""demo"", ""feature"": ""Make the sidebar collapsible (variant 7)"", ""title"": ""Make the sidebar collapsible""}",A
+"{""app"": ""demo"", ""feature"": ""Speed up the export command (variant 7)"", ""title"": ""Speed up the export command""}",B
+"{""app"": ""demo"", ""feature"": ""Add a loading spinner to the dashboard (variant 8)"", ""title"": ""Add a loading spinner to the dashboard""}",A
+"{""app"": ""demo"", ""feature"": ""Fix a typo in the README (variant 8)"", ""title"": ""Fix a typo in the README""}",B
+"{""app"": ""demo"", ""feature"": ""Redesign the settings page layout (variant 9)"", ""title"": ""Redesign the settings page layout""}",A
+"{""app"": ""demo"", ""feature"": ""Rotate the log files daily (variant 9)"", ""title"": ""Rotate the log files daily""}",B
+"{""app"": ""demo"", ""feature"": ""Add a dark mode toggle (variant 10)"", ""title"": ""Add a dark mode toggle""}",A
+"{""app"": ""demo"", ""feature"": ""Bump the postgres client library (variant 10)"", ""title"": ""Bump the postgres client library""}",B
+"{""app"": ""demo"", ""feature"": ""Fix the button alignment on the login page (variant 11)"", ""title"": ""Fix the button alignment on the login page""}",A
+"{""app"": ""demo"", ""feature"": ""Add a retry to the queue worker (variant 11)"", ""title"": ""Add a retry to the queue worker""}",B

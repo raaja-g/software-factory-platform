@@ -65,7 +65,7 @@ def volumes() -> dict:
 
 # The build-profile services (runner images) are not part of the running stack.
 def _stack() -> dict[str, dict]:
-    return {n: s for n, s in svcs_items() if s.get("profiles") != ["build"]}
+    return {n: s for n, s in svcs_items() if s.get("profiles") not in (["build"], ["laya"])}
 
 
 DEFAULT_SERVICES = set(_stack())
@@ -89,7 +89,7 @@ def test_default_services():
         "pkg-mirror-pypi",
         "pkg-mirror-auth",
     }
-    assert "router" not in compose()["services"]
+    assert compose()["services"]["router"]["profiles"] == ["laya"]  # M11.1: opt-in only
 
 
 def test_no_shared_sandbox_network():
@@ -129,6 +129,7 @@ def test_artifacts_volume_shared():
         "pkg-cache-npm",
         "pkg-cache-pypi",
         "pkg-auth",
+        "laya-heads",
     }
     assert all(
         "artifacts:/var/lib/factory/artifacts" in svc(n)["volumes"] for n in ("api", "orchestrator")
@@ -143,7 +144,7 @@ def test_pinned_digests():
         n
         for n, s in svcs_items()
         if "image" in s
-        and not s["image"].startswith(("swfactory-platform", "swfactory/"))
+        and not s["image"].startswith(("swfactory-platform", "swfactory/", "swfactory-router"))
         and "@sha256:" not in s["image"]
     ] == []
 
@@ -395,3 +396,58 @@ def test_orchestrator_can_write_to_its_named_volumes():
         if src in compose.get("volumes", {}) and mode != "ro":
             writable.append(dst)
     assert writable and set(writable) - owned == set(), (writable, owned)
+
+
+# ---- M11.1: Laya router service ---------------------------------------------------------------
+def test_router_service():
+    r = compose()["services"]["router"]
+    assert r["profiles"] == ["laya"] and r["networks"] == ["core-net"]
+    assert "ports" not in r and r["restart"] == "unless-stopped"
+    assert "sandbox-net" not in compose()["networks"]
+    assert "/health" in " ".join(r["healthcheck"]["test"])
+    assert r["healthcheck"]["interval"] == "10s" and r["healthcheck"]["start_period"] == "60s"
+    env = r["environment"]
+    # `:-` rather than the plan's `:?`: a required-variable check fails every compose command
+    # (config, up postgres, make test-db) for anyone not running the profile. The shim refuses an
+    # empty key instead (tests/integration/test_router_image.py).
+    assert env["LAYA_API_KEY"] == "${LAYA_API_KEY:-}"
+    assert env["LAYA_PRELOAD"] == "1" and env["LAYA_MAX_LOADED"] == "1"
+    assert "laya-heads:/heads" in r["volumes"] and "laya-heads" in compose()["volumes"]
+    assert r["image"] == "swfactory-router:dev"
+    assert r["build"]["dockerfile"] == "docker/router.Dockerfile"
+    assert r["read_only"] is True and r["tmpfs"] == ["/tmp"] and r["cap_drop"] == ["ALL"]
+    assert r["mem_limit"] == "3g"
+
+
+def test_router_only_reachable_from_core_net():
+    doc = compose()
+    for name, svc in doc["services"].items():
+        if name != "router":
+            assert "router" not in svc.get("depends_on", {}), name
+    orch = doc["services"]["orchestrator"]["environment"]
+    assert "FACTORY_LAYA_URL" in orch and "LAYA_API_KEY" in orch
+
+
+def test_router_profile_is_off_by_default():
+    assert Settings(_env_file=None, FACTORY_DATABASE_URL="postgresql://x/y").laya_url is None  # type: ignore[call-arg]
+
+
+def test_docker_proxy_allows_what_the_sandbox_needs_and_nothing_more():
+    """The sandbox provider copies files in and out of a box with put/get archive, runs exec, and
+    manages containers, networks and volumes. The proxy denies /containers/<id>/archive unless
+    ALLOW_ARCHIVE is set, which stopped every job at `prepare` on the real stack (the Docker tests
+    use the local socket and never saw the proxy). Everything else stays off."""
+    env = svc("docker-proxy")["environment"]
+    on = {k for k, v in env.items() if str(v) == "1"}
+    assert {"CONTAINERS", "POST", "EXEC", "ALLOW_ARCHIVE", "IMAGES", "NETWORKS", "VOLUMES"} <= on
+    off = {
+        "BUILD",
+        "SECRETS",
+        "AUTH",
+        "SYSTEM",
+        "ALLOW_EXPORT",
+        "ALLOW_CHANGES",
+        "SWARM",
+        "PLUGINS",
+    }
+    assert not (off & on)

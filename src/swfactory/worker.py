@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import re
 import time
@@ -72,9 +73,11 @@ from swfactory.graph.steps import (
     job_head,
     keep_job_branch,
     pinned_definition,
+    run_agent_step,
     step_budget_s,
 )
 from swfactory.logging import log_context
+from swfactory.models.router_client import RouterClient
 from swfactory.models.triage import TriageService
 from swfactory.notify import Notifier
 from swfactory.queue import claim_next_job, release_job, renew_lease
@@ -106,6 +109,13 @@ _ACTIVE = frozenset(st.value for st in ACTIVE_STAGES)
 def crash_backoff_s(crash_count: int) -> int:
     """Seconds a job waits before it is claimed again after its ``crash_count``-th crash."""
     return 60 * 2 ** (crash_count - 1)
+
+
+def _router(settings: Settings) -> RouterClient | None:
+    if not settings.laya_url:
+        return None
+    key = settings.laya_api_key.get_secret_value() if settings.laya_api_key else ""
+    return RouterClient(settings.laya_url, key)
 
 
 def build_worker_deps(
@@ -155,7 +165,8 @@ def build_worker_deps(
             settings.gateway_url, settings.gateway_master_key.get_secret_value()
         )
         real_catalog = Catalog(sessions, real_gateway, definitions)
-        return Deps(
+        triage = TriageService(definitions, artifacts, router=_router(settings))
+        deps = Deps(
             sessions=sessions,
             events=events,
             artifacts=artifacts,
@@ -164,18 +175,20 @@ def build_worker_deps(
                 attach=settings.sandbox_attach,
                 output_max_bytes=settings.exec_output_max_bytes,
             ),
-            selector=ModelSelector(sessions, real_catalog, events),
+            selector=ModelSelector(sessions, real_catalog, events, router=_router(settings)),
             catalog=real_catalog,
             gateway=real_gateway,
             budgets=BudgetService(sessions, definitions),
             git=GitDispatcher(git_services),
             roles=RoleLibrary(),
-            triage=TriageService(definitions, artifacts),
+            triage=triage,
             definitions=definitions,
             scoring=ScoringService(sessions, events, definitions, real_catalog),
             settings=settings,
             docker_client=lambda: docker.DockerClient(base_url=settings.docker_host),
         )
+        triage.llm_step = functools.partial(run_agent_step, deps)
+        return deps
     register_engine(FakeEngine(FakeScript.from_yaml(fake_script)))
     from swfactory.engines.fake import FakeRunGateway, FakeSelector
 
@@ -188,7 +201,8 @@ def build_worker_deps(
         catalog = Catalog(
             sessions, GatewayClient(gateway_url, master_key.get_secret_value()), definitions
         )
-    return Deps(
+    triage = TriageService(definitions, artifacts, router=_router(settings))
+    deps = Deps(
         sessions=sessions,
         events=events,
         artifacts=artifacts,
@@ -199,11 +213,13 @@ def build_worker_deps(
         budgets=BudgetService(sessions, definitions),
         git=FakeGitService(state_path=fake_git_state),
         roles=RoleLibrary(),
-        triage=TriageService(definitions, artifacts),
+        triage=triage,
         definitions=definitions,
         scoring=ScoringService(sessions, events, definitions, catalog),
         settings=settings,
     )
+    triage.llm_step = functools.partial(run_agent_step, deps)
+    return deps
 
 
 class _Renewal:

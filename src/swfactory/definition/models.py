@@ -389,6 +389,7 @@ class TriageRule(StrictModel):
 
 class TriageConfig(StrictModel):
     mode: TriageMode = TriageMode.RULES
+    modes: dict[Literal["kind", "size", "risk", "touches_ui"], TriageMode] = {}
     rules: tuple[TriageRule, ...] = ()
 
 
@@ -472,10 +473,27 @@ class RoleProfile(StrictModel):
     allow_experimental: bool = False
 
 
+TIER_ROLES = frozenset({Role.BUILDER, Role.SPEC_WRITER})
+_TIER_MODES = frozenset({SelectionMode.SHADOW, SelectionMode.LAYA})
+
+
+def _check_tier_mode(role: Role, mode: SelectionMode | None) -> None:
+    if mode is not None and mode in _TIER_MODES and role not in TIER_ROLES:
+        raise ValueError(
+            f"{role.value}: mode {mode.value} is allowed only for builder and spec-writer"
+        )
+
+
 class Profile(StrictModel):
     description: str = ""
     continuity: Literal["fresh", "resume"] | None = None
     roles: dict[Role, RoleProfile]
+
+    @model_validator(mode="after")
+    def _tier_modes(self) -> "Profile":
+        for role, rp in self.roles.items():
+            _check_tier_mode(role, rp.mode)
+        return self
 
 
 class RoleFile(StrictModel):
@@ -612,6 +630,13 @@ class BenchConfigDef(StrictModel):
     profile: str
     roles: dict[Role, RoleOverride] = {}
     triage_modes: dict[str, TriageMode] = {}
+    laya_heads: dict[str, Annotated[int, Field(ge=1)]] = {}
+
+    @model_validator(mode="after")
+    def _tier_modes(self) -> "BenchConfigDef":
+        for role, ro in self.roles.items():
+            _check_tier_mode(role, ro.mode)
+        return self
 
     @field_validator("triage_modes")
     @classmethod
@@ -621,6 +646,16 @@ class BenchConfigDef(StrictModel):
                 raise ValueError(
                     f"unknown triage question '{q}'; allowed: {', '.join(TRIAGE_QUESTIONS)}"
                 )
+        return v
+
+    @field_validator("laya_heads")
+    @classmethod
+    def _known_head_questions(cls, v: dict[str, int]) -> dict[str, int]:
+        tiers = {f"tier.{r.value}" for r in TIER_ROLES}
+        for q in v:
+            if q not in TRIAGE_QUESTIONS and q not in tiers:
+                allowed = (*TRIAGE_QUESTIONS, *sorted(tiers))
+                raise ValueError(f"unknown question '{q}'; allowed: {', '.join(allowed)}")
         return v
 
 

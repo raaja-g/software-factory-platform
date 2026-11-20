@@ -49,3 +49,23 @@ def test_score_and_finalize_handlers_end_graph(node):  # L13, L14
 def test_handlers_reraise_lease_lost(node):
     with pytest.raises(LeaseLost):
         handler_of(node)(state, LeaseLost())
+
+
+def test_error_handler_logs_why_the_step_failed():
+    # the gate reason only names the node; the log carries the cause so an operator can find it
+    from structlog.testing import capture_logs
+
+    with capture_logs() as logs:
+        make_error_handler("prepare")(state, FileNotFoundError("no such repo /repos/demo.git"))  # type: ignore[arg-type]
+    failed = [x for x in logs if x["event"] == "node.failed"]
+    assert len(failed) == 1
+    assert (failed[0]["node"], failed[0]["cause"]) == ("prepare", "FileNotFoundError")
+    assert "no such repo" in failed[0]["detail"] and failed[0]["job_id"] == "x"
+
+
+def test_error_handler_log_detail_is_truncated():
+    from structlog.testing import capture_logs
+
+    with capture_logs() as logs:
+        make_error_handler("prepare")(state, RuntimeError("x" * 5000))  # type: ignore[arg-type]
+    assert len(next(x for x in logs if x["event"] == "node.failed")["detail"]) == 300

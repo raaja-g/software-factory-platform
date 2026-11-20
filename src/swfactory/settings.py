@@ -92,6 +92,13 @@ class Settings(BaseSettings):
     gateway_url: str = Field(
         default="http://127.0.0.1:4000", validation_alias="FACTORY_GATEWAY_URL"
     )
+    laya_url: str | None = Field(default=None, validation_alias="FACTORY_LAYA_URL")
+    laya_api_key: SecretStr | None = Field(default=None, validation_alias="LAYA_API_KEY")
+    # where `factory laya export` and `evaluate` write CSVs and reports; in the container it must
+    # be a directory the factory user can write (the artifacts volume)
+    laya_export_dir: Path = Field(
+        default=Path("var/laya"), validation_alias="FACTORY_LAYA_EXPORT_DIR"
+    )
     gateway_config_path: str | None = Field(default=None, validation_alias="FACTORY_GATEWAY_CONFIG")
     gateway_sandbox_url: str = Field(
         default="http://gateway-edge:4000", validation_alias="FACTORY_GATEWAY_SANDBOX_URL"

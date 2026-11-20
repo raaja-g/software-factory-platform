@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Collection, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable, Collection, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from swfactory.domain.types import EngineSupport, ModelRef, Role, SelectionMode
+from swfactory.costs.pricing import estimate_cost
+from swfactory.domain.types import EngineSupport, ModelRef, Role, SelectionMode, Usage
 from swfactory.models.profiles import engine_support, model_family
 
 if TYPE_CHECKING:
@@ -17,7 +18,8 @@ if TYPE_CHECKING:
 
     from swfactory.events import EventBus
     from swfactory.models.catalog import Catalog, ModelInfo
-    from swfactory.models.profiles import ResolvedProfile, RoleModel
+    from swfactory.models.profiles import ResolvedProfile, RoleModel, TierOption
+    from swfactory.models.router_client import LayaAnswer
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +121,88 @@ def pick_model(
     return Pick(chosen, f"fallback: {first_skipped} {why_skipped}", first_skipped, tuple(options))
 
 
+TYPICAL_USAGE: Mapping[Role, Usage] = {
+    Role.BUILDER: Usage(400_000, 40_000),
+    Role.SPEC_WRITER: Usage(100_000, 10_000),
+    Role.REVIEWER_SECURITY: Usage(150_000, 8_000),
+    Role.REVIEWER_UX: Usage(150_000, 8_000),
+    Role.REVIEWER_UI: Usage(150_000, 8_000),
+    Role.REVIEWER_CODE: Usage(150_000, 8_000),
+    Role.APPROVER: Usage(30_000, 2_000),
+    Role.JUDGE: Usage(30_000, 2_000),
+}
+_DEFAULT_USAGE = Usage(100_000, 10_000)
+
+
+def tier_question(role: Role, tiers: Sequence[TierOption]) -> dict[str, dict[str, Any]]:
+    """The router question for a tier choice; labels are opaque, model names are never sent."""
+    return {
+        f"tier.{role.value}": {
+            "type": "choice",
+            "instructions": "Which capability tier should do this step?",
+            "criteria": {t.label: t.description for t in tiers},
+        }
+    }
+
+
+def selection_state(ctx: SelectionContext) -> dict[str, Any]:
+    """The compact state the router sees (kept far below 512 tokens)."""
+    return {
+        "app": ctx.app_slug,
+        "role": ctx.role.value,
+        "round": ctx.round,
+        "feature_chars": ctx.feature_chars,
+        "spec_chars": ctx.spec_chars,
+        "diff_files": ctx.diff_files,
+        "diff_lines": ctx.diff_lines,
+        "prior_verdicts": dict(ctx.prior_verdicts),
+        "budget_left_usd": float(ctx.budget_left_usd),
+    }
+
+
+def gate_tier(
+    rm: RoleModel,
+    pick: Pick,
+    answer: LayaAnswer,
+    infos: Mapping[str, ModelInfo | None],
+    budget_left: Decimal,
+    role: Role,
+    *,
+    support: Callable[[str, ModelInfo], EngineSupport] = engine_support,
+) -> tuple[Pick, str]:
+    """Use the router's tier only if every gate passes; otherwise keep the fixed pick."""
+
+    def fallback(why: str) -> tuple[Pick, str]:
+        reason = f"laya fallback: {why}"
+        if pick.reason not in ("primary", "sticky"):
+            reason += f"; fixed: {pick.reason}"
+        return replace(pick, reason=reason), reason
+
+    if answer.error is not None:
+        return fallback(f"router error ({answer.error})")
+    if answer.head_version is None:
+        return fallback("no fitted head")
+    if answer.route != "auto":
+        return fallback(f"route {answer.route}")
+    label = answer.choice
+    tier = next((t for t in rm.tiers if t.label == label), None)
+    if tier is None:
+        return fallback(f"tier {label} not allowed")
+    info = infos.get(tier.model)
+    if info is None:
+        return fallback(f"tier {label} model unavailable (unknown model)")
+    if not info.available:
+        return fallback(f"tier {label} model unavailable ({info.error_class or 'unknown'})")
+    sup = support(rm.engine, info)
+    if not (
+        sup is EngineSupport.OK or (sup is EngineSupport.EXPERIMENTAL and rm.allow_experimental)
+    ):
+        return fallback(f"tier {label} engine support {sup.value}")
+    if estimate_cost(info, TYPICAL_USAGE.get(role, _DEFAULT_USAGE)) > budget_left:
+        return fallback(f"tier {label} not affordable")
+    return Pick(tier.model, f"laya: tier {label}", None, pick.options), f"laya: tier {label}"
+
+
 class ModelSelector:
     def __init__(
         self,
@@ -136,10 +220,58 @@ class ModelSelector:
         self.router = router
 
     async def _router_pick(
-        self, rm: RoleModel, ctx: SelectionContext, pick: Pick
-    ) -> tuple[Pick, Any]:
-        """Shadow/laya seam: fixed behavior in every mode until M11."""
-        return pick, None
+        self,
+        rm: RoleModel,
+        ctx: SelectionContext,
+        pick: Pick,
+        infos: Mapping[str, ModelInfo | None],
+    ) -> tuple[Pick, dict[str, Any] | None]:
+        """Shadow/laya: ask the router for a tier. Never raises; fixed behavior on any problem."""
+        if (
+            rm.mode is SelectionMode.FIXED
+            or pick.reason == "sticky"
+            or not rm.tiers
+            or pick.alias is None
+        ):
+            return pick, None
+        if self.router is None:
+            return replace(pick, reason="laya fallback: router not configured"), None
+        questions = tier_question(ctx.role, rm.tiers)
+        qid = f"tier.{ctx.role.value}"
+        state = selection_state(ctx)
+        try:
+            answers = await self.router.decide(state, questions, pins=ctx.laya_pins or None)
+            answer = answers[qid]
+        except Exception:
+            from swfactory.models.router_client import LayaAnswer
+
+            answer = LayaAnswer(None, {}, None, 0, "bad response")
+        info: dict[str, Any] = {
+            "answer": {
+                "choice": answer.choice,
+                "probabilities": dict(answer.probabilities),
+                "route": answer.route,
+                "error": answer.error,
+                "state": state,
+            },
+            "router_version": answer.router_version,
+            "head_version": answer.head_version,
+            "latency_ms": answer.latency_ms,
+            "tier": None,
+        }
+        if rm.mode is SelectionMode.SHADOW:
+            reason = "shadow: fixed used"
+            if answer.error is not None:
+                reason += f" (router error ({answer.error}))"
+            if pick.reason not in ("primary", "sticky"):
+                reason += f"; fixed: {pick.reason}"
+            return replace(pick, reason=reason), info
+        new, _reason = gate_tier(
+            rm, pick, answer, infos, ctx.budget_left_usd, ctx.role, support=self.support
+        )
+        if new.alias is not None and new.reason.startswith("laya: tier "):
+            info["tier"] = new.reason.removeprefix("laya: tier ")
+        return new, info
 
     async def choose(
         self, profile: ResolvedProfile, ctx: SelectionContext, *, exclude: Collection[str] = ()
@@ -150,13 +282,13 @@ class ModelSelector:
         rm = profile.for_role(ctx.role)
         async with self.sessions() as s:
             sticky = await repo.last_model_decision(s, ctx.job_id, ctx.role.value)
-        aliases: list[str] = [rm.model, *rm.fallback]
+        aliases: list[str] = [rm.model, *rm.fallback, *(t.model for t in rm.tiers)]
         if sticky:
             aliases.append(sticky)
         aliases = list(dict.fromkeys(aliases))
         infos = {a: await self.catalog.get(a) for a in aliases}
         pick = pick_model(rm, infos, sticky_alias=sticky, exclude=exclude, support=self.support)
-        pick, _answer = await self._router_pick(rm, ctx, pick)
+        pick, laya = await self._router_pick(rm, ctx, pick, infos)
         info = infos.get(pick.alias) if pick.alias else None
         reason = pick.reason
         if (
@@ -177,6 +309,9 @@ class ModelSelector:
                 chosen=pick.alias,
                 reason=reason,
                 latency_ms=int((time.monotonic() - t0) * 1000),
+                answer=laya["answer"] if laya else None,
+                router_version=laya["router_version"] if laya else None,
+                head_version=laya["head_version"] if laya else None,
             )
         if pick.alias is None or info is None:
             raise NoModelAvailable("no model available")
@@ -196,7 +331,7 @@ class ModelSelector:
             engine=rm.engine,
             model=ModelRef(info.alias, info.provider, info.upstream_id),
             mode=rm.mode,
-            tier=None,
+            tier=laya["tier"] if laya else None,
             decision_id=decision_id,
             reason=reason,
         )

@@ -155,15 +155,33 @@ async def _source_costs(s: AsyncSession, suite: BenchSuiteDef) -> dict[str, Deci
 
 
 def _chosen_configs(
-    sdef: BenchSuiteDef, suite: str, configs: Sequence[str] | None
+    sdef: BenchSuiteDef,
+    suite: str,
+    configs: Sequence[str | BenchConfigDef] | None,
+    *,
+    defn: Definition | None = None,
 ) -> list[BenchConfigDef]:
+    """Suite configurations by name, plus inline ``BenchConfigDef`` values revalidated (M10.7)."""
     by_name = {c.name: c for c in sdef.configurations}
     if configs is None:
         return list(sdef.configurations)
-    unknown = [c for c in configs if c not in by_name]
+    out: dict[str, BenchConfigDef] = {}
+    unknown: list[str] = []
+    for c in configs:
+        if isinstance(c, BenchConfigDef):
+            c = BenchConfigDef.model_validate(c.model_dump(mode="json"))
+            if c.name in out:
+                raise ValueError(f"duplicate configuration name '{c.name}'")
+            if defn is not None and c.profile not in defn.profiles:
+                raise ValueError(f"configuration '{c.name}': unknown profile '{c.profile}'")
+            out[c.name] = c
+        elif c in by_name:
+            out.setdefault(c, by_name[c])
+        else:
+            unknown.append(c)
     if unknown:
         raise ValueError(f"unknown configuration(s) {', '.join(unknown)} in suite '{suite}'")
-    return [by_name[c] for c in dict.fromkeys(configs)]
+    return list(out.values())
 
 
 async def compute_estimate(
@@ -171,7 +189,7 @@ async def compute_estimate(
     defn: Definition,
     *,
     suite: str,
-    configs: Sequence[str] | None,
+    configs: Sequence[str | BenchConfigDef] | None,
     repetitions: int,
 ) -> tuple[BenchSuiteDef, list[BenchConfigDef], Estimate]:
     """The estimate for a run as it would start now (the same numbers ``start`` checks)."""
@@ -180,7 +198,7 @@ async def compute_estimate(
         raise ValueError(f"no such benchmark suite '{suite}'")
     if repetitions < 1:
         raise ValueError("repetitions must be at least 1")
-    chosen = _chosen_configs(sdef, suite, configs)
+    chosen = _chosen_configs(sdef, suite, configs, defn=defn)
     est = estimate_run(
         sdef,
         chosen,
@@ -199,7 +217,7 @@ async def start_bench_run(
     defn: Definition,
     *,
     suite: str,
-    configs: Sequence[str] | None,
+    configs: Sequence[str | BenchConfigDef] | None,
     repetitions: int,
     budget_usd: Decimal | None,
     definition_sha: str,
@@ -229,6 +247,7 @@ async def start_bench_run(
             overrides = {
                 "roles": {r.value: o.model_dump(mode="json") for r, o in cfg.roles.items()},
                 "triage_modes": {q: m.value for q, m in cfg.triage_modes.items()},
+                "laya_heads": dict(cfg.laya_heads),
             }
             for rep in range(1, repetitions + 1):
                 s.add(
@@ -243,6 +262,17 @@ async def start_bench_run(
                 )
     await s.commit()
     return run.id
+
+
+async def _label_bench(s: AsyncSession, run_id: UUID) -> None:
+    """Label the run's tier decisions; a failure never blocks the run (L13)."""
+    try:
+        from swfactory.laya.export import label_bench_outcomes
+
+        async with s.begin_nested():
+            await label_bench_outcomes(s, run_id)
+    except Exception as exc:
+        log.warning("laya.bench_label_failed", run_id=str(run_id), error=repr(exc))
 
 
 TICK_LOCK = "select pg_try_advisory_xact_lock(hashtext('bench_tick'))"
@@ -349,6 +379,8 @@ class BenchRunner:
                 capped = any(r.status == "skipped_budget" for r in results)
                 run.status = "stopped_budget" if capped else "done"
                 run.finished_at = now
+                if run.status == "done":
+                    await _label_bench(s, run.id)
         await s.flush()
         return started
 

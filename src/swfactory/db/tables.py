@@ -20,7 +20,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import UserDefinedType
 
@@ -423,6 +423,61 @@ class BenchTaskCheck(Base):
     created_at: Mapped[datetime] = _ts()
     finished_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
     __table_args__ = (_check("bench_task_checks", "status", BENCH_CHECK_STATUSES),)
+
+
+class LayaHead(Base):
+    """A fitted router head (M11.8): one row per question and version; fitting never activates."""
+
+    __tablename__ = "laya_heads"
+    id: Mapped[uuid.UUID] = _pk()
+    question: Mapped[str] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer)
+    rows: Mapped[int] = mapped_column(Integer)
+    label_counts: Mapped[Any] = _jsonb("{}", nullable=False)
+    questions_sha256: Mapped[str] = mapped_column(Text)
+    csv_sha256: Mapped[str] = mapped_column(Text)
+    path: Mapped[str] = mapped_column(Text)
+    router_version: Mapped[str | None] = mapped_column(Text)
+    metrics: Mapped[Any] = _jsonb("{}", nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    head_sha256: Mapped[str] = mapped_column(Text)
+    train_refs: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default=text("'{}'::text[]"))
+    evaluation: Mapped[Any] = _jsonb()
+    source_counts: Mapped[Any] = _jsonb("{}", nullable=False)
+    activated_by: Mapped[str | None] = mapped_column(Text)
+    activated_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
+    created_at: Mapped[datetime] = _ts()
+    __table_args__ = (
+        UniqueConstraint("question", "version", name="laya_heads_question_version_key"),
+    )
+
+
+class LayaDataset(Base):
+    """An imported file of synthetic training rows (M11.10)."""
+
+    __tablename__ = "laya_datasets"
+    id: Mapped[uuid.UUID] = _pk()
+    name: Mapped[str] = mapped_column(Text)
+    question: Mapped[str] = mapped_column(Text)
+    origin_url: Mapped[str] = mapped_column(Text)
+    licence: Mapped[str] = mapped_column(Text)
+    rows: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(Text, unique=True)
+    imported_by: Mapped[str] = mapped_column(Text)
+    imported_at: Mapped[datetime] = _ts()
+    __table_args__ = (UniqueConstraint("question", "name", name="laya_datasets_question_name_key"),)
+
+
+class LayaImportedRow(Base):
+    __tablename__ = "laya_imported_rows"
+    id: Mapped[uuid.UUID] = _pk()
+    dataset_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("app.laya_datasets.id", ondelete="CASCADE")
+    )
+    question: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(Text)
+    label: Mapped[str] = mapped_column(Text)
+    __table_args__ = (Index("laya_imported_rows_question_idx", "question"),)
 
 
 class Improvement(Base):

@@ -900,6 +900,9 @@ async def insert_model_decision(
     reason: str | None,
     latency_ms: int | None,
     purpose: str = "model",
+    answer: Mapping[str, Any] | None = None,
+    router_version: str | None = None,
+    head_version: str | None = None,
 ) -> UUID:
     row = ModelDecision(
         job_id=job_id,
@@ -908,9 +911,11 @@ async def insert_model_decision(
         purpose=purpose,
         mode=mode,
         options=list(options),
-        answer=None,
+        answer=dict(answer) if answer is not None else None,
         chosen=chosen,
         reason=reason,
+        router_version=router_version,
+        head_version=head_version,
         latency_ms=latency_ms,
     )
     s.add(row)

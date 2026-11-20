@@ -347,6 +347,15 @@
     "BenchConfigDef": {
       "additionalProperties": false,
       "properties": {
+        "laya_heads": {
+          "additionalProperties": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "default": {},
+          "title": "Laya Heads",
+          "type": "object"
+        },
         "name": {
           "title": "Name",
           "type": "string"
@@ -1471,6 +1480,22 @@
           "$ref": "#/$defs/TriageMode",
           "default": "rules"
         },
+        "modes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TriageMode"
+          },
+          "default": {},
+          "propertyNames": {
+            "enum": [
+              "kind",
+              "size",
+              "risk",
+              "touches_ui"
+            ]
+          },
+          "title": "Modes",
+          "type": "object"
+        },
         "rules": {
           "default": [],
           "items": {
@@ -1807,6 +1832,7 @@
       "$ref": "#/$defs/TriageConfig",
       "default": {
         "mode": "rules",
+        "modes": {},
         "rules": []
       }
     }

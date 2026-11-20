@@ -4,7 +4,7 @@ Updated after every completed step.
 
 ## Now
 
-M10 is done (scoring and benchmarks); starting M11 (Laya). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
+M11 is done (Laya); next is M12 (the improver). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
 
 ## Plan revision (before coding)
 
@@ -126,6 +126,16 @@ M10 is done (scoring and benchmarks); starting M11 (Laya). M0's spikes wait for 
 - [x] **2026-11-19** M7 checked by me: 1016 default tests (run with Postgres down, so none depends on the database), all database tests (run in chunks), 80 Docker tests and 42 dashboard tests pass; `make up` brings the whole stack healthy in 38 s and `/readyz` shows one worker, the database and the definition.
 - [x] **2026-11-19** Fixes made while checking: old CLI tests rewritten for the API-based CLI (who-asked now comes from the signed-in user); the gateway stack tests got a mock-model compose override (the gateway now reads a rendered config); a loader test no longer depends on a developer's `.env`; a unit test that was quietly querying the dev database now uses a stub; the notification webhook now reaches the API and worker in compose.
 - [ ] **Needs you:** the live acceptance replay (`make up` then `pytest -m e2e tests/e2e/test_v1_parity.py`) and real registry connections need Vertex credentials, models and your registries.
+
+## M11 Laya (done)
+
+- [x] **2026-11-20** M11.1 router image and compose service (hash-locked, weights baked, non-root, no published port); M11.2 RouterClient that never raises; M11.3 triage through Laya per question with rules last; M11.4 the `llm` triage mode and contract; M11.5 tier choice in the model selector (shadow and laya); M11.6 outcome labels; M11.7 `factory laya export`; M11.8 fit with versioned heads; M11.9 benchmark fixed vs laya and the documented switch; M11.10 `factory laya import`
+- [x] **2026-11-20** Spike S7 was never run, so M11.1 derived its facts locally (base image digest, Hugging Face commit and file hashes, the real laya 0.4.31 package, torch wheels) and wrote them to `router/README.md`
+- [x] **2026-11-20** Checked by me: 1560 default tests; database tests (72 Laya/model, 448 integration and unit, 147 graph, 15 crash-resume, 12 loop); 4 router image tests (incl. multi-arch) and 29 other Docker tests; 47 UI tests; ruff and pyright clean
+- [x] **2026-11-20** Live on the stack: router healthy on `core-net` only; shadow-mode job records four triage rows (`laya 0.4.31`, ~1.1 s); router stopped, job still runs and the error is recorded; export, import and the fit refusal work
+- [x] **2026-11-20** Found by live checking and fixed: **no job could get past `prepare` on the real stack** because the Docker socket proxy denies archive calls unless `ALLOW_ARCHIVE` is set (the Docker tests use the local socket, so none saw it); the graph error handler never logged why a step failed (now logs `node.failed` with the cause); `laya export` and `evaluate` wrote to a relative folder the container user cannot write (now `FACTORY_LAYA_EXPORT_DIR`); the import success line now matches the plan
+- [ ] **Important caveat:** laya 0.4.31 cannot train its classifier on our data. A fitted head is Laya's own calibration (confidence and route), so Laya never changes which option wins; it can only decide when to answer. The benchmark proof before switching a question on still applies
+- [ ] **Needs you:** a model provider so a job can reach the build step; the synthetic or public training rows (see the data options in the chat); a real fit and evaluation
 
 ## M10 Scoring and benchmarks
 

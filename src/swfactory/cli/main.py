@@ -1552,3 +1552,311 @@ def notify_test():
 from swfactory.cli.run import run as _run_command  # noqa: E402
 
 app.command("run")(_run_command)
+
+
+laya_app = typer.Typer(help="Laya router training data", no_args_is_help=True)
+app.add_typer(laya_app, name="laya")
+
+
+@laya_app.command("export")
+def laya_export(
+    question: Annotated[
+        str, typer.Option("--question", help="kind, size, risk, touches_ui or tier.<role>")
+    ],
+    out: Annotated[
+        Path | None, typer.Option("--out", help="CSV path (default var/laya/<q>.csv)")
+    ] = None,
+):
+    """Write the state and label CSV for one router question."""
+    from swfactory.laya.export import (
+        export_rows,
+        format_source_counts,
+        known_question,
+        source_counts,
+        write_csv,
+    )
+
+    if not known_question(question):
+        typer.echo(f"unknown question '{question}'", err=True)
+        raise typer.Exit(2)
+    settings = get_settings()
+    path = out or settings.laya_export_dir / f"{question}.csv"
+
+    async def run() -> list[Any]:
+        engine = make_engine(settings.sqlalchemy_url())
+        try:
+            async with make_sessionmaker(engine)() as s:
+                return await export_rows(s, question)
+        finally:
+            await engine.dispose()
+
+    rows = asyncio.run(run())
+    try:
+        counts = write_csv(rows, path, question)
+    except OSError as e:
+        typer.echo(f"cannot write {path}: {e.strerror or e}", err=True)
+        raise typer.Exit(1) from None
+    detail = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
+    typer.echo(f"wrote {path}: {len(rows)} rows ({detail})")
+    typer.echo(f"sources: {format_source_counts(source_counts(rows))}")
+
+
+def _laya_run(fn):
+    settings = get_settings()
+
+    async def go():
+        engine = make_engine(settings.sqlalchemy_url())
+        try:
+            async with make_sessionmaker(engine)() as s, s.begin():
+                return await fn(s, settings)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(go())
+
+
+@laya_app.command("import")
+def laya_import(
+    question: Annotated[
+        str, typer.Option("--question", help="kind, size, risk, touches_ui or tier.<role>")
+    ],
+    file: Annotated[Path, typer.Option("--file", help="CSV with columns state,<question>")],
+    source: Annotated[str, typer.Option("--source", help="Dataset name, e.g. synth-v1")],
+    origin: Annotated[str, typer.Option("--origin", help="Where the data came from (URL)")],
+    licence: Annotated[str, typer.Option("--licence", help="Licence of the data")],
+):
+    """Import synthetic training rows, tagged external:<source>. Exit 2 refused."""
+    from swfactory.definition.loader import defaults_dir, load_definition
+    from swfactory.definition.store import load_active
+    from swfactory.laya.import_rows import ImportRefused, import_rows
+
+    async def go(s, settings):
+        active = await load_active(s)
+        defn = active[1] if active else load_definition(str(defaults_dir())).definition
+        if defn is None:
+            raise ImportRefused("refused: no definition is loaded")
+        ds = await import_rows(
+            s,
+            defn,
+            question=question,
+            path=file,
+            source=source,
+            origin_url=origin,
+            licence=licence,
+            imported_by=_who(),
+        )
+        return ds.name, ds.rows, ds.sha256
+
+    try:
+        name, n, sha = _laya_run(go)
+    except ImportRefused as e:
+        msg = str(e)
+        typer.echo(msg if msg.startswith("refused") else f"refused: {msg}", err=True)
+        raise typer.Exit(2) from None
+    typer.echo(f"imported {name}: {n} rows for {question} (sha256 {sha[:12]})")
+
+
+@laya_app.command("fit")
+def laya_fit(
+    question: Annotated[
+        str, typer.Option("--question", help="kind, size, risk, touches_ui or tier.<role>")
+    ],
+):
+    """Fit a candidate head in the router (never activates it). Exit 2 refused, 3 router down."""
+    from swfactory.laya.export import format_source_counts, known_question
+    from swfactory.laya.fit import (
+        FitRefused,
+        RouterRefused,
+        RouterUnreachable,
+        fit_question,
+    )
+
+    if not known_question(question):
+        typer.echo(f"unknown question '{question}'", err=True)
+        raise typer.Exit(2)
+
+    async def go(s, settings):
+        key = settings.laya_api_key.get_secret_value() if settings.laya_api_key else ""
+        h = await fit_question(s, settings.laya_url or "", key, question)
+        return h.version, h.rows, h.source_counts
+
+    try:
+        version, rows, counts = _laya_run(go)
+    except FitRefused as e:
+        msg = str(e)
+        typer.echo(msg if msg.startswith("refused") else f"refused: {msg}", err=True)
+        raise typer.Exit(2) from None
+    except RouterUnreachable as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(3) from None
+    except RouterRefused as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from None
+    typer.echo(
+        f"fitted {question} v{version} from {rows} rows ({format_source_counts(counts)}) "
+        "(candidate, not active)"
+    )
+
+
+def _who() -> str:
+    import getpass
+
+    return getpass.getuser()
+
+
+@laya_app.command("evaluate")
+def laya_evaluate(
+    question: Annotated[
+        str, typer.Option("--question", help="kind, size, risk, touches_ui or tier.<role>")
+    ],
+    suite: Annotated[str, typer.Option("--suite", help="A holdout benchmark suite")],
+    version: Annotated[
+        int | None, typer.Option("--version", help="Head version (default the newest)")
+    ] = None,
+    repetitions: Annotated[
+        int, typer.Option("--repetitions", help="Repetitions per task (at least 2)")
+    ] = 2,
+    profile: Annotated[
+        str | None, typer.Option("--profile", help="Profile (default the suite's first)")
+    ] = None,
+    yes: Annotated[bool, typer.Option("--yes", help="Skip the confirmation")] = False,
+):
+    """Benchmark fixed against laya for one head and say whether to switch. Exit 2 refused."""
+    from swfactory.laya.evaluate import (
+        EVAL_REPETITIONS,
+        EvaluationRefused,
+        report_table,
+        run_evaluation,
+        verdict_line,
+    )
+
+    if repetitions < EVAL_REPETITIONS:
+        typer.echo(f"refused: at least {EVAL_REPETITIONS} repetitions are needed", err=True)
+        raise typer.Exit(2)
+    settings = get_settings()
+
+    async def confirm(est, names):
+        typer.echo(
+            f"{' vs '.join(names)} on {suite}: {est.trials} trials, "
+            f"estimate ${est.total_usd:.2f} (at most ${est.max_usd:.2f})"
+        )
+        return yes or typer.confirm("Start the run?", default=False)
+
+    async def go():
+        engine = make_engine(settings.sqlalchemy_url())
+        try:
+            return await run_evaluation(
+                make_sessionmaker(engine),
+                question=question,
+                suite=suite,
+                version=version,
+                repetitions=repetitions,
+                profile=profile,
+                requested_by=_who(),
+                confirm=confirm,
+            )
+        finally:
+            await engine.dispose()
+
+    try:
+        out = asyncio.run(go())
+    except EvaluationRefused as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(2) from None
+    if out is None:
+        typer.echo("not started")
+        raise typer.Exit(1)
+    verdict, rep, path = out
+    for line in report_table(rep):
+        typer.echo(line)
+    typer.echo(f"report: {path}")
+    typer.echo(verdict_line(verdict))
+
+
+@laya_app.command("activate")
+def laya_activate(
+    question: Annotated[
+        str, typer.Option("--question", help="kind, size, risk, touches_ui or tier.<role>")
+    ],
+    version: Annotated[int, typer.Option("--version", help="Head version to make active")],
+):
+    """Make an evaluated head the only active one (also how you roll back). Exit 2 refused."""
+    from swfactory.laya.evaluate import ActivationRefused, activate_head
+    from swfactory.laya.fit import RouterRefused, RouterUnreachable
+
+    async def go(s, settings):
+        key = settings.laya_api_key.get_secret_value() if settings.laya_api_key else ""
+        await activate_head(s, settings.laya_url or "", key, question, version, by=_who())
+
+    try:
+        _laya_run(go)
+    except ActivationRefused as e:
+        typer.echo(f"refused: {e}", err=True)
+        raise typer.Exit(2) from None
+    except RouterUnreachable as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(3) from None
+    except RouterRefused as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from None
+    typer.echo(
+        f"{question}@v{version} is now the active head; the router serves it only where the "
+        "definition says mode: laya"
+    )
+
+
+@laya_app.command("status")
+def laya_status():
+    """Per question: mode, active head, newest candidate, labelled rows, last fit."""
+    from sqlalchemy import select
+
+    from swfactory.db.tables import LayaHead
+    from swfactory.definition.store import load_active
+    from swfactory.laya.export import (
+        QUESTIONS_TRIAGE,
+        export_rows,
+        format_source_counts,
+        question_ids,
+        source_counts,
+    )
+
+    async def go(s, settings):
+        active = await load_active(s)
+        defn = active[1] if active else None
+        questions = question_ids(defn) if defn else list(QUESTIONS_TRIAGE)
+        heads = list(await s.scalars(select(LayaHead).order_by(LayaHead.version)))
+        lines = []
+        for q in questions:
+            mine = [h for h in heads if h.question == q]
+            on = next((h for h in mine if h.active), None)
+            cands = [h for h in mine if not h.active and (on is None or h.version > on.version)]
+            cand = cands[-1] if cands else None
+            if defn is None:
+                mode = "-"
+            elif q.startswith("tier."):
+                modes = {
+                    p.roles[r].mode.value
+                    for p in defn.profiles.values()
+                    for r in p.roles
+                    if f"tier.{r.value}" == q and p.roles[r].tiers
+                }
+                mode = ",".join(sorted(modes)) or "-"
+            else:
+                mode = defn.factory.triage.modes.get(q, defn.factory.triage.mode).value  # type: ignore[call-overload]
+            erows = await export_rows(s, q)
+            n = len(erows)
+            ev = "none"
+            if cand is not None and cand.evaluation:
+                ev = str(cand.evaluation.get("verdict", "evaluated"))
+            last = max((h.created_at for h in mine), default=None)
+            cand_txt = f"{q}@v{cand.version} (eval: {ev})" if cand else "-"
+            lines.append(
+                f"{q}\tmode={mode}\tactive={q + '@v' + str(on.version) if on else '-'}"
+                f"\tcandidate={cand_txt}"
+                f"\trows={n} ({format_source_counts(source_counts(erows))})"
+                f"\tlast_fit={last.isoformat(timespec='seconds') if last else '-'}"
+            )
+        return lines
+
+    for line in _laya_run(go):
+        typer.echo(line)

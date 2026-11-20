@@ -12,4 +12,13 @@ Read your inputs from `{{in_dir}}/<file>`. Read the app context from `{{in_dir}}
 
 Classify the request in `{{in_dir}}/feature.md` and write the triage note.
 
-{{output_instruction}} Follow the triage.md format the factory gives in the prompt (kind, size, risk, and a one-line reason each).
+{{output_instruction}} The output must start with exactly these four lines, in lowercase, and nothing else before a blank line:
+
+```
+kind: feature|bugfix|refactor|docs|infra
+size: S|M|L
+risk: low|medium|high
+touches_ui: true|false
+```
+
+After a blank line, give a one-line reason for each answer.

@@ -17,7 +17,7 @@ from swfactory.definition.models import (
     Definition,
     RoleOverride,
 )
-from swfactory.domain.types import Role, SelectionMode
+from swfactory.domain.types import Role, SelectionMode, TriageMode
 
 pytestmark = pytest.mark.db
 
@@ -125,3 +125,46 @@ async def test_unknown_suite_and_config(sessions, defn):
                 s, defn, suite="v1-parity", configs=["zzz"], repetitions=1, budget_usd=None,
                 definition_sha="x", accept_estimate_usd=Decimal(0), requested_by="a",
             )  # fmt: skip
+
+
+async def test_inline_configs_reach_trials(sessions, defn):
+    fixed = BenchConfigDef(
+        name="fixed", profile="team-gemini", triage_modes={"kind": TriageMode.RULES}
+    )
+    laya = BenchConfigDef(
+        name="laya",
+        profile="team-gemini",
+        triage_modes={"kind": TriageMode.LAYA},
+        laya_heads={"kind": 3},
+    )
+    async with sessions() as s:
+        with pytest.raises(ValueError, match="duplicate configuration name"):
+            await start_bench_run(
+                s, defn, suite="v1-parity", configs=[fixed, fixed], repetitions=1,
+                budget_usd=None, definition_sha="x", accept_estimate_usd=Decimal(0),
+                requested_by="a",
+            )  # fmt: skip
+        with pytest.raises(ValueError, match="unknown profile"):
+            await start_bench_run(
+                s, defn, suite="v1-parity", repetitions=1, budget_usd=None,
+                configs=[BenchConfigDef(name="x", profile="nope")], definition_sha="x",
+                accept_estimate_usd=Decimal(0), requested_by="a",
+            )  # fmt: skip
+        # a suite configuration by name and an inline one in the same run
+        run = await start_bench_run(
+            s, defn, suite="v1-parity", configs=["claude", laya], repetitions=1,
+            budget_usd=None, definition_sha="sha1", accept_estimate_usd=Decimal("80.32"),
+            requested_by="admin",
+        )  # fmt: skip
+    async with sessions() as s:
+        rows = (await s.scalars(select(BenchResult).where(BenchResult.run_id == run))).all()
+        stored = await s.get(BenchRun, run)
+    assert stored is not None
+    assert stored.configurations == [CLAUDE.model_dump(mode="json"), laya.model_dump(mode="json")]
+    by = {r.configuration: r.overrides for r in rows}
+    assert by["laya"]["laya_heads"] == {"kind": 3} and by["laya"]["triage_modes"] == {
+        "kind": "laya"
+    }
+    assert by["claude"]["laya_heads"] == {} and len(rows) == 8
+    assert BenchConfigDef.model_validate(stored.configurations[1]) == laya
+    assert fixed.laya_heads == {}

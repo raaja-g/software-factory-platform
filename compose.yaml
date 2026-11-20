@@ -103,6 +103,9 @@ services:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
       FACTORY_BROKER_TOKEN_FILE: /run/secrets/broker_token
       FACTORY_GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github_app_key
+      FACTORY_LAYA_URL: ${FACTORY_LAYA_URL:-}
+      LAYA_API_KEY: ${LAYA_API_KEY:-}
+      FACTORY_LAYA_EXPORT_DIR: /var/lib/factory/artifacts/laya
     # The token broker listens on 8091 inside core-net only; it is never published.
     secrets:
       - pg_password
@@ -131,6 +134,7 @@ services:
       CONTAINERS: "1"
       POST: "1"
       EXEC: "1"
+      ALLOW_ARCHIVE: "1"        # copy files into and out of a sandbox (put/get archive); denied by default
       IMAGES: "1"
       NETWORKS: "1"
       VOLUMES: "1"
@@ -336,6 +340,40 @@ services:
     restart: unless-stopped
     networks: [mirror-net, core-net]
 
+  # Optional Laya router (M11.1), profile `laya`. Core network only: the orchestrator reaches it here
+  # and nothing on a job network can. Weights are baked into the image; no network is needed.
+  # mem_limit: measured 2.0 GiB resident with the English checkpoint, times 1.5.
+  router:
+    profiles: [laya]
+    image: swfactory-router:dev
+    build:
+      context: .
+      dockerfile: docker/router.Dockerfile
+    environment:
+      # Empty means the shim refuses to start. A required-variable (:?) form here would make every
+      # compose command fail for anyone not running the profile.
+      LAYA_API_KEY: ${LAYA_API_KEY:-}
+      LAYA_PRELOAD: "1"
+      LAYA_MAX_LOADED: "1"
+    volumes:
+      - laya-heads:/heads
+    mem_limit: 3g
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    restart: unless-stopped
+    networks: [core-net]
+
   runner:
     profiles: [build]
     image: swfactory/runner:0.1.0
@@ -370,6 +408,7 @@ volumes:
   pkg-cache-npm: {}
   pkg-cache-pypi: {}
   pkg-auth: {}
+  laya-heads: {}
 
 secrets:
   pg_password:

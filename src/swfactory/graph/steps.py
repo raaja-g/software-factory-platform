@@ -7,7 +7,7 @@ import fnmatch
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -108,6 +108,7 @@ _RULES: Mapping[str, str] = {
     "verdict": "Its first non-empty line must be exactly `VERDICT: PASS` or `VERDICT: CHANGES`.",
     "decision": "Its first non-empty line must be exactly `APPROVE` or `ESCALATE`.",
     "requirements": "It must end with one fenced `yaml` backlog block that follows the format.",
+    "triage": "It must start with `kind:`, `size:`, `risk:` and `touches_ui:` lines.",
     "spec": "It must contain a `## Acceptance criteria` section with at least one `- [ ]` item.",
 }
 
@@ -187,6 +188,12 @@ async def benchmark_role_overrides(deps: Deps, job: Job) -> dict[Role, RoleOverr
     ov = await benchmark_overrides(deps, job)
     roles = (ov or {}).get("roles") or {}
     return {Role(r): RoleOverride.model_validate(o) for r, o in roles.items()} or None
+
+
+async def benchmark_laya_pins(deps: Deps, job: Job) -> dict[str, int]:
+    """Head versions a benchmark trial pins per question; normal jobs never pin."""
+    ov = await benchmark_overrides(deps, job)
+    return {str(q): int(v) for q, v in ((ov or {}).get("laya_heads") or {}).items()}
 
 
 def step_timeout_s(defn: Definition, key: str) -> int:
@@ -837,6 +844,9 @@ async def _attempt(
             role_overrides=await benchmark_role_overrides(deps, job),
         )
         sel_ctx = await build_selection_context(deps, job, role, round, box)
+        pins = await benchmark_laya_pins(deps, job)
+        if pins:
+            sel_ctx = replace(sel_ctx, laya_pins=pins)
         picked = await deps.selector.choose(profile, sel_ctx, exclude=set(exclude))
     engine_name = engine or picked.engine
     info = await deps.catalog.get(picked.model.alias)

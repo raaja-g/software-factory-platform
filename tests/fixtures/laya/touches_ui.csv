@@ -1,0 +1,61 @@
+state,touches_ui
+"{""app"": ""demo"", ""feature"": ""Add a dark mode toggle to the settings page (variant 0)"", ""title"": ""Add a dark mode toggle to the settings page""}",A
+"{""app"": ""demo"", ""feature"": ""Bump the postgres client library (variant 0)"", ""title"": ""Bump the postgres client library""}",B
+"{""app"": ""demo"", ""feature"": ""Change the button colour on the login form (variant 1)"", ""title"": ""Change the button colour on the login form""}",A
+"{""app"": ""demo"", ""feature"": ""Add a retry to the queue worker (variant 1)"", ""title"": ""Add a retry to the queue worker""}",B
+"{""app"": ""demo"", ""feature"": ""Make the sidebar collapsible (variant 2)"", ""title"": ""Make the sidebar collapsible""}",A
+"{""app"": ""demo"", ""feature"": ""Fix an off-by-one in the pagination query (variant 2)"", ""title"": ""Fix an off-by-one in the pagination query""}",B
+"{""app"": ""demo"", ""feature"": ""Add a loading spinner to the dashboard (variant 3)"", ""title"": ""Add a loading spinner to the dashboard""}",A
+"{""app"": ""demo"", ""feature"": ""Rotate the signing key on startup (variant 3)"", ""title"": ""Rotate the signing key on startup""}",B
+"{""app"": ""demo"", ""feature"": ""Fix the misaligned header on mobile (variant 4)"", ""title"": ""Fix the misaligned header on mobile""}",A
+"{""app"": ""demo"", ""feature"": ""Speed up the nightly export job (variant 4)"", ""title"": ""Speed up the nightly export job""}",B
+"{""app"": ""demo"", ""feature"": ""Show a toast when saving succeeds (variant 5)"", ""title"": ""Show a toast when saving succeeds""}",A
+"{""app"": ""demo"", ""feature"": ""Add an index on jobs.created_at (variant 5)"", ""title"": ""Add an index on jobs.created_at""}",B
+"{""app"": ""demo"", ""feature"": ""Redesign the pricing table layout (variant 6)"", ""title"": ""Redesign the pricing table layout""}",A
+"{""app"": ""demo"", ""feature"": ""Refactor the config loader into a module (variant 6)"", ""title"": ""Refactor the config loader into a module""}",B
+"{""app"": ""demo"", ""feature"": ""Add keyboard focus outlines to links (variant 7)"", ""title"": ""Add keyboard focus outlines to links""}",A
+"{""app"": ""demo"", ""feature"": ""Raise the timeout of the webhook client (variant 7)"", ""title"": ""Raise the timeout of the webhook client""}",B
+"{""app"": ""demo"", ""feature"": ""Add an empty state illustration to the inbox (variant 8)"", ""title"": ""Add an empty state illustration to the inbox""}",A
+"{""app"": ""demo"", ""feature"": ""Add unit tests for the cost estimator (variant 8)"", ""title"": ""Add unit tests for the cost estimator""}",B
+"{""app"": ""demo"", ""feature"": ""Move the search box into the navbar (variant 9)"", ""title"": ""Move the search box into the navbar""}",A
+"{""app"": ""demo"", ""feature"": ""Log the lease epoch on every heartbeat (variant 9)"", ""title"": ""Log the lease epoch on every heartbeat""}",B
+"{""app"": ""demo"", ""feature"": ""Add a dark mode toggle to the settings page (variant 10)"", ""title"": ""Add a dark mode toggle to the settings page""}",A
+"{""app"": ""demo"", ""feature"": ""Bump the postgres client library (variant 10)"", ""title"": ""Bump the postgres client library""}",B
+"{""app"": ""demo"", ""feature"": ""Change the button colour on the login form (variant 11)"", ""title"": ""Change the button colour on the login form""}",A
+"{""app"": ""demo"", ""feature"": ""Add a retry to the queue worker (variant 11)"", ""title"": ""Add a retry to the queue worker""}",B
+"{""app"": ""demo"", ""feature"": ""Make the sidebar collapsible (variant 12)"", ""title"": ""Make the sidebar collapsible""}",A
+"{""app"": ""demo"", ""feature"": ""Fix an off-by-one in the pagination query (variant 12)"", ""title"": ""Fix an off-by-one in the pagination query""}",B
+"{""app"": ""demo"", ""feature"": ""Add a loading spinner to the dashboard (variant 13)"", ""title"": ""Add a loading spinner to the dashboard""}",A
+"{""app"": ""demo"", ""feature"": ""Rotate the signing key on startup (variant 13)"", ""title"": ""Rotate the signing key on startup""}",B
+"{""app"": ""demo"", ""feature"": ""Fix the misaligned header on mobile (variant 14)"", ""title"": ""Fix the misaligned header on mobile""}",A
+"{""app"": ""demo"", ""feature"": ""Speed up the nightly export job (variant 14)"", ""title"": ""Speed up the nightly export job""}",B
+"{""app"": ""demo"", ""feature"": ""Show a toast when saving succeeds (variant 15)"", ""title"": ""Show a toast when saving succeeds""}",A
+"{""app"": ""demo"", ""feature"": ""Add an index on jobs.created_at (variant 15)"", ""title"": ""Add an index on jobs.created_at""}",B
+"{""app"": ""demo"", ""feature"": ""Redesign the pricing table layout (variant 16)"", ""title"": ""Redesign the pricing table layout""}",A
+"{""app"": ""demo"", ""feature"": ""Refactor the config loader into a module (variant 16)"", ""title"": ""Refactor the config loader into a module""}",B
+"{""app"": ""demo"", ""feature"": ""Add keyboard focus outlines to links (variant 17)"", ""title"": ""Add keyboard focus outlines to links""}",A
+"{""app"": ""demo"", ""feature"": ""Raise the timeout of the webhook client (variant 17)"", ""title"": ""Raise the timeout of the webhook client""}",B
+"{""app"": ""demo"", ""feature"": ""Add an empty state illustration to the inbox (variant 18)"", ""title"": ""Add an empty state illustration to the inbox""}",A
+"{""app"": ""demo"", ""feature"": ""Add unit tests for the cost estimator (variant 18)"", ""title"": ""Add unit tests for the cost estimator""}",B
+"{""app"": ""demo"", ""feature"": ""Move the search box into the navbar (variant 19)"", ""title"": ""Move the search box into the navbar""}",A
+"{""app"": ""demo"", ""feature"": ""Log the lease epoch on every heartbeat (variant 19)"", ""title"": ""Log the lease epoch on every heartbeat""}",B
+"{""app"": ""demo"", ""feature"": ""Add a dark mode toggle to the settings page (variant 20)"", ""title"": ""Add a dark mode toggle to the settings page""}",A
+"{""app"": ""demo"", ""feature"": ""Bump the postgres client library (variant 20)"", ""title"": ""Bump the postgres client library""}",B
+"{""app"": ""demo"", ""feature"": ""Change the button colour on the login form (variant 21)"", ""title"": ""Change the button colour on the login form""}",A
+"{""app"": ""demo"", ""feature"": ""Add a retry to the queue worker (variant 21)"", ""title"": ""Add a retry to the queue worker""}",B
+"{""app"": ""demo"", ""feature"": ""Make the sidebar collapsible (variant 22)"", ""title"": ""Make the sidebar collapsible""}",A
+"{""app"": ""demo"", ""feature"": ""Fix an off-by-one in the pagination query (variant 22)"", ""title"": ""Fix an off-by-one in the pagination query""}",B
+"{""app"": ""demo"", ""feature"": ""Add a loading spinner to the dashboard (variant 23)"", ""title"": ""Add a loading spinner to the dashboard""}",A
+"{""app"": ""demo"", ""feature"": ""Rotate the signing key on startup (variant 23)"", ""title"": ""Rotate the signing key on startup""}",B
+"{""app"": ""demo"", ""feature"": ""Fix the misaligned header on mobile (variant 24)"", ""title"": ""Fix the misaligned header on mobile""}",A
+"{""app"": ""demo"", ""feature"": ""Speed up the nightly export job (variant 24)"", ""title"": ""Speed up the nightly export job""}",B
+"{""app"": ""demo"", ""feature"": ""Show a toast when saving succeeds (variant 25)"", ""title"": ""Show a toast when saving succeeds""}",A
+"{""app"": ""demo"", ""feature"": ""Add an index on jobs.created_at (variant 25)"", ""title"": ""Add an index on jobs.created_at""}",B
+"{""app"": ""demo"", ""feature"": ""Redesign the pricing table layout (variant 26)"", ""title"": ""Redesign the pricing table layout""}",A
+"{""app"": ""demo"", ""feature"": ""Refactor the config loader into a module (variant 26)"", ""title"": ""Refactor the config loader into a module""}",B
+"{""app"": ""demo"", ""feature"": ""Add keyboard focus outlines to links (variant 27)"", ""title"": ""Add keyboard focus outlines to links""}",A
+"{""app"": ""demo"", ""feature"": ""Raise the timeout of the webhook client (variant 27)"", ""title"": ""Raise the timeout of the webhook client""}",B
+"{""app"": ""demo"", ""feature"": ""Add an empty state illustration to the inbox (variant 28)"", ""title"": ""Add an empty state illustration to the inbox""}",A
+"{""app"": ""demo"", ""feature"": ""Add unit tests for the cost estimator (variant 28)"", ""title"": ""Add unit tests for the cost estimator""}",B
+"{""app"": ""demo"", ""feature"": ""Move the search box into the navbar (variant 29)"", ""title"": ""Move the search box into the navbar""}",A
+"{""app"": ""demo"", ""feature"": ""Log the lease epoch on every heartbeat (variant 29)"", ""title"": ""Log the lease epoch on every heartbeat""}",B

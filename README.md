@@ -2,7 +2,7 @@
 
 A platform that turns a requirement into reviewed, merged code. For each feature it runs spec, build, verify, four independent reviews, approve and deliver, using coding agents on any model provider. It runs on your machine in Docker, many apps and features at a time.
 
-**Status: under construction.** Milestones M1 to M8 and M10 are built: foundation, the job loop, roles and contracts, sandboxes with the verify gate and local git, the model gateway with cost control, the coding-agent adapters, the API, dashboard and CLI with a one-command local release, GitHub, scoring with a Metrics page, and now benchmarks. Still to come: Laya routing (M11) and the improver (M12). See [progress.md](progress.md).
+**Status: under construction.** Milestones M1 to M8, M10 and M11 are built: foundation, the job loop, roles and contracts, sandboxes with the verify gate and local git, the model gateway with cost control, the coding-agent adapters, the API, dashboard and CLI with a one-command local release, GitHub, scoring with a Metrics page, benchmarks, and now the Laya router. Still to come: the improver (M12). See [progress.md](progress.md).
 
 ## What works now (M1 to M8)
 
@@ -73,6 +73,15 @@ Not verified live: the judges have never run against a real model, because no re
   - **Safe by design.** Every run has its own budget cap, checked before each trial starts; trials run one at a time on `bench/<run>/<task>/<config>` branches and never touch your main branch; a run that hits its cap stops with `stopped_budget` and still reports the trials it finished.
   - **Reports.** `factory bench report RUN` shows, per configuration, the hidden-check pass rate (with a 95% interval), rounds, cost and time, and a recommendation. The Benchmarks page (`#/benchmarks`) lists runs, plots cost against quality and starts a run only after showing the estimate.
 
+- **Laya, an optional router (M11).** A small model in its own container that answers the triage questions (`kind`, `size`, `risk`, `touches_ui`) and, per role, which model tier to use. It has no published port, sits only on the internal `core-net`, is never attached to a job's network, and needs a key. Its weights are baked into the image, so it needs no network. It is off until you start it, and every question starts in **shadow**: Laya answers, the answer is recorded next to the rules' or the fixed model's, and the rules or the fixed model still decide. If the router is down, the job carries on with the rules and records `laya fallback: router error`.
+  - **Start it.** Put `LAYA_API_KEY=<random>` and `FACTORY_LAYA_URL=http://router:8000` in `.env`, then `docker compose --profile laya up -d --build router` (the first build downloads about 6 GB and takes a few minutes). `router/README.md` has the details, including how the image was pinned.
+  - **The `llm` triage mode.** A cheap direct model call that answers the triage questions under the triage contract, as an alternative to the rules. Set `triage.modes` per question to `rules`, `llm`, `shadow` or `laya`.
+  - **Teach it.** `factory laya export --question touches_ui` writes your labelled rows (from outcomes: review verdicts, rounds, cost, your triage corrections, and benchmark groups). `factory laya import --question touches_ui --file rows.csv --source <name> --origin <url> --licence <licence>` adds outside rows (CSV with a `state` column and one label column named after the question); each file can be imported once, and imported rows never count as held-out data. `factory laya fit --question touches_ui` needs at least 50 labelled rows and makes a candidate head that is not active.
+  - **What fitting does, honestly.** The installed Laya (0.4.31) cannot train its classifier on your data. A fitted head is Laya's own calibration, fitted on your rows: it makes the confidence and the route (auto, review) trustworthy, so Laya takes over only when it is confident. It never changes which option wins, so Laya's accuracy stays that of the underlying model. Expect it to answer some questions and defer the rest.
+  - **Switching on needs proof.** `factory laya evaluate --question tier.builder --suite v1-parity` runs a benchmark of the fixed choice against Laya and prints `switch: yes` only if the quality matches at lower cost; it refuses a suite whose tasks the head trained on. Then `factory laya activate --question tier.builder --version <n>` and set `mode: laya` yourself. Nothing switches itself on. `factory laya status` shows each question's mode, head and row counts.
+
+Checked on the live stack (M11): the router starts healthy on `core-net` only with no published port; a job in shadow mode records four triage rows with router version `laya 0.4.31` in about a second; with the router stopped the job still runs and the error is recorded; `export`, `import` and the `fit` refusal work. Not verified live: no head has been fitted on real outcomes or evaluated against a real model, and no job has reached the build step, because no model provider is configured yet.
+
 Not verified live (M10 part B): no benchmark has run against a real model. The estimate, seeding and the page were checked on the live stack, and the trials themselves are tested with fakes.
 
 Not verified live (M8): none of M8 has run against real GitHub. It is tested against a fake GitHub and local git repos; the GitHub App setup in your org (spike S11 in the plan) and a real PR round trip are still to do.
@@ -140,4 +149,4 @@ uv run pytest -m docker                         # builds and uses real container
 
 ## Next
 
-M11: Laya, an optional router that learns from your outcomes and your synthetic rows (import with `factory laya import`), runs in shadow mode first, and takes over a question only after a benchmark proves equal quality at lower cost. Then the improver (M12). After that, the live pass: real models, the GitHub App and your registries.
+M12: the improver, which reads your scores, benchmarks and corrections and proposes changes to the definition (roles, profiles, triage rules) that you approve. After that, the live pass: real models, the GitHub App and your registries.

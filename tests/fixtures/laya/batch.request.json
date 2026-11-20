@@ -1,0 +1,47 @@
+{
+ "states": [
+  {
+   "title": "Fix 403 on origin null",
+   "description": "CORS check rejects null origin"
+  }
+ ],
+ "questions": {
+  "kind": {
+   "type": "choice",
+   "instructions": "x",
+   "criteria": {
+    "feature": "feature",
+    "bugfix": "bugfix",
+    "refactor": "refactor",
+    "docs": "docs",
+    "infra": "infra"
+   }
+  },
+  "size": {
+   "type": "choice",
+   "instructions": "x",
+   "criteria": {
+    "S": "S",
+    "M": "M",
+    "L": "L"
+   }
+  },
+  "risk": {
+   "type": "choice",
+   "instructions": "x",
+   "criteria": {
+    "low": "low",
+    "medium": "medium",
+    "high": "high"
+   }
+  },
+  "touches_ui": {
+   "type": "choice",
+   "instructions": "x",
+   "criteria": {
+    "A": "A",
+    "B": "B"
+   }
+  }
+ }
+}

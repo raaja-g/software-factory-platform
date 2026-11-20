@@ -1,0 +1,62 @@
+{
+ "results": [
+  {
+   "model": "english",
+   "answers": {
+    "kind": {
+     "type": "choice",
+     "choice": "feature",
+     "confidence": 0.7,
+     "probabilities": {
+      "feature": 0.7,
+      "bugfix": 0.075,
+      "refactor": 0.075,
+      "docs": 0.075,
+      "infra": 0.075
+     },
+     "route": "auto",
+     "head_version": null
+    },
+    "size": {
+     "type": "choice",
+     "choice": "S",
+     "confidence": 0.7,
+     "probabilities": {
+      "S": 0.7,
+      "M": 0.15,
+      "L": 0.15
+     },
+     "route": "auto",
+     "head_version": null
+    },
+    "risk": {
+     "type": "choice",
+     "choice": "low",
+     "confidence": 0.7,
+     "probabilities": {
+      "low": 0.7,
+      "medium": 0.15,
+      "high": 0.15
+     },
+     "route": "review",
+     "head_version": null
+    },
+    "touches_ui": {
+     "type": "choice",
+     "choice": "A",
+     "confidence": 0.7,
+     "probabilities": {
+      "A": 0.7,
+      "B": 0.3
+     },
+     "route": "auto",
+     "head_version": null
+    }
+   },
+   "usage": {
+    "input_tokens": 120,
+    "output_tokens": 0
+   }
+  }
+ ]
+}

@@ -42,6 +42,47 @@ def parse_decision(text: str) -> Decision:
     return Decision(m.group(1).upper())
 
 
+_TRIAGE_LINE_RE = re.compile(r"(kind|size|risk|touches_ui):[ \t]*(\S+)")
+_TRIAGE_STRIP = " \t#>*_-"
+_TRIAGE_LABELS: dict[str, tuple[str, ...]] = {
+    "kind": ("feature", "bugfix", "refactor", "docs", "infra"),
+    "size": ("S", "M", "L"),
+    "risk": ("low", "medium", "high"),
+}
+
+
+def parse_triage(text: str) -> dict[str, str | bool]:
+    """The four triage answers from the lines before the first blank line; all four are required."""
+    found: dict[str, str] = {}
+    for raw in text.splitlines():
+        if not raw.strip():
+            if found:
+                break
+            continue
+        line = raw.strip(_TRIAGE_STRIP)
+        m = _TRIAGE_LINE_RE.fullmatch(line)
+        if m is None:
+            raise ContractError(
+                f"unexpected line {line[:60]!r}; use 'kind|size|risk|touches_ui: <value>' lines"
+            )
+        key, value = m.group(1), m.group(2)
+        if key in found:
+            raise ContractError(f"'{key}' appears more than once")
+        found[key] = value
+    missing = [k for k in ("kind", "size", "risk", "touches_ui") if k not in found]
+    if missing:
+        raise ContractError(f"missing {', '.join(missing)}")
+    out: dict[str, str | bool] = {}
+    for key, labels in _TRIAGE_LABELS.items():
+        if found[key] not in labels:
+            raise ContractError(f"unknown {key} '{found[key]}'; allowed: {', '.join(labels)}")
+        out[key] = found[key]
+    if found["touches_ui"] not in ("true", "false"):
+        raise ContractError(f"touches_ui must be true or false, not '{found['touches_ui']}'")
+    out["touches_ui"] = found["touches_ui"] == "true"
+    return {k: out[k] for k in ("kind", "size", "risk", "touches_ui")}
+
+
 def _is_heading(line: str, heading: str) -> bool:
     return line.strip().lower() == heading.lower()
 
@@ -166,6 +207,8 @@ def check_output(contract: str, text: str | None, *, max_items: int = 30) -> str
             parse_verdict(text)
         elif contract == "decision":
             parse_decision(text)
+        elif contract == "triage":
+            parse_triage(text)
         elif contract == "spec":
             problems = check_spec(text)
             return "; ".join(problems) or None
