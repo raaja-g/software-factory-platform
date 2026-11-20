@@ -9,7 +9,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +18,7 @@ from swfactory.api.auth import Principal, require
 from swfactory.backlogs import format_backlog_ref
 from swfactory.commands import format_job_ref, retry_offered
 from swfactory.db.repo import _iso, board, latest_waiting
-from swfactory.db.tables import AgentRun, App, Backlog, Job
+from swfactory.db.tables import AgentRun, App, Backlog, Job, Score
 from swfactory.definition.store import NoActiveDefinition, load_active
 from swfactory.domain.types import Stage
 from swfactory.events import stream_position
@@ -84,12 +84,46 @@ def board_job(row: Mapping[str, Any]) -> dict[str, Any]:
         "budget_usd": row.get("budget_usd"),
         "models": row.get("models", {}),
         "fallback": bool(row.get("fallback", False)),
-        "quality": None,
+        "quality": row.get("quality") if column_for(stage) == "done" else None,
         "merge_policy": row.get("merge_policy"),
         "pr_url": row.get("pr_url"),
         "kind": row.get("kind", "normal"),
         "backlog_ref": row.get("backlog_ref"),
         "backlog_pos": row.get("backlog_pos"),
+    }
+
+
+_DONE_STAGES = frozenset(s.value for s, c in _COLUMNS.items() if c == "done")
+
+
+async def _quality(s: AsyncSession, ids: list[UUID]) -> dict[UUID, dict[str, Any]]:
+    """The badge and judge tally for done jobs: ``obj.quality`` plus each judge's latest row."""
+    if not ids:
+        return {}
+    rows = (
+        await s.scalars(
+            select(Score)
+            .where(
+                Score.job_id.in_(ids),
+                or_(Score.scorer == "obj.quality", Score.judge_model.is_not(None)),
+            )
+            .order_by(Score.created_at, Score.id)
+        )
+    ).all()
+    badge: dict[UUID, str] = {}
+    judges: dict[UUID, dict[tuple[str, str], bool | None]] = defaultdict(dict)
+    for r in rows:
+        if r.scorer == "obj.quality":
+            badge[r.job_id] = r.label
+        elif r.judge_model is not None:
+            judges[r.job_id][(r.scorer, r.judge_model)] = r.passed
+    return {
+        jid: {
+            "badge": b,
+            "judges_passed": sum(1 for p in judges[jid].values() if p),
+            "judges_total": sum(1 for p in judges[jid].values() if p is not None),
+        }
+        for jid, b in badge.items()
     }
 
 
@@ -141,6 +175,7 @@ async def build_board(
                 await s.execute(select(Backlog.id, Backlog.seq).where(Backlog.id.in_(bl_ids)))
             ).all()
         }
+    quality = await _quality(s, [UUID(b["job_id"]) for b in base if b["stage"] in _DONE_STAGES])
     found = await load_active(s)
     defn = None if found is None else found[1]
     out: list[dict[str, Any]] = []
@@ -182,6 +217,7 @@ async def build_board(
             if j.backlog_id is None or j.backlog_id not in bl_seq
             else format_backlog_ref(b["app"], bl_seq[j.backlog_id]),
             "backlog_pos": j.backlog_pos,
+            "quality": quality.get(jid),
         }
         out.append(board_job(row))
     done = [j for j in out if j["column"] == "done"][:done_limit]

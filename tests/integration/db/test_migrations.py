@@ -5,10 +5,11 @@ import psycopg
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine
 from tests.support.pg import execute, libpq, scalar
 
-from swfactory.db.migrate import include_name, include_object, upgrade_database
+from swfactory.db.migrate import alembic_config, include_name, include_object, upgrade_database
 from swfactory.db.tables import Base
 
 pytestmark = pytest.mark.db
@@ -53,12 +54,11 @@ async def seed_job(url: str) -> str:
 
 
 async def test_upgrade_creates_schema(pg_url):
-    assert (
-        await scalar(pg_url, "select version_num from app.alembic_version") == "m8_03_github_intake"
-    )
+    head = ScriptDirectory.from_config(alembic_config(pg_url)).get_current_head()  # not hardcoded
+    assert await scalar(pg_url, "select version_num from app.alembic_version") == head
     assert await scalar(pg_url, "select to_regclass('app.artifacts_latest')") is not None
     assert await scalar(pg_url, "select count(*) from pg_namespace where nspname = 'lg'") == 1
-    assert upgrade_database(pg_url) == "m8_03_github_intake"  # idempotent
+    assert upgrade_database(pg_url) == head  # idempotent
 
 
 async def test_backlog_tables_columns_and_turn_function(pg_url):
@@ -180,3 +180,33 @@ async def test_least_privilege_roles(pg_url):
         )
     finally:
         await execute(pg_url, f"drop role {probe}")
+
+
+async def test_score_requests_table(pg_url):
+    scripts = ScriptDirectory.from_config(alembic_config(pg_url))
+    rev = scripts.get_revision("m10_03b_score_requests")
+    assert rev is not None and rev.down_revision == "m10_03_judge_labels"
+    job_id = await seed_job(pg_url)
+    await execute(
+        pg_url,
+        f"insert into app.score_requests (job_id, requested_by) values ('{job_id}', 'me')",
+    )
+    row = await scalar(
+        pg_url,
+        "select status || ',' || force::text || ',' || (scorers is null)::text "
+        "|| ',' || (summary is null)::text from app.score_requests",
+    )
+    assert row == "pending,false,true,true"
+    with pytest.raises(Exception, match="score_requests_status_check"):
+        await execute(
+            pg_url,
+            f"insert into app.score_requests (job_id, requested_by, status) "
+            f"values ('{job_id}', 'me', 'bogus')",
+        )
+    with pytest.raises(Exception, match="foreign key"):
+        await execute(
+            pg_url,
+            "insert into app.score_requests (job_id, requested_by) "
+            "values ('00000000-0000-7000-8000-0000000000ff', 'me')",
+        )
+    await execute(pg_url, "delete from app.score_requests")

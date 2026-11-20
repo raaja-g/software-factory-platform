@@ -2,7 +2,7 @@
 
 A platform that turns a requirement into reviewed, merged code. For each feature it runs spec, build, verify, four independent reviews, approve and deliver, using coding agents on any model provider. It runs on your machine in Docker, many apps and features at a time.
 
-**Status: under construction.** Milestones M1 to M8 are built: foundation, the job loop, roles and contracts, sandboxes with the verify gate and local git, the model gateway with cost control, the coding-agent adapters, the API, dashboard and CLI with a one-command local release, and now GitHub. Still to come: scoring and benchmarks (M10), Laya routing (M11) and the improver (M12). See [progress.md](progress.md).
+**Status: under construction.** Milestones M1 to M8 and the scoring half of M10 are built: foundation, the job loop, roles and contracts, sandboxes with the verify gate and local git, the model gateway with cost control, the coding-agent adapters, the API, dashboard and CLI with a one-command local release, GitHub, and now scoring and a Metrics page. Still to come: benchmarks (the second half of M10), Laya routing (M11) and the improver (M12). See [progress.md](progress.md).
 
 ## What works now (M1 to M8)
 
@@ -59,7 +59,15 @@ Not verified live: the acceptance replay of v1's four features with real models 
   - **PR comment commands.** `/factory approve`, `rework <note>` and `reject` on the PR, checked against GitHub's own permissions; a lost webhook is recovered by polling. `rework` on a delivered PR starts a follow-up job on the same branch.
   - **Also:** `factory apps create` makes a new repo with auto-merge on; cron schedules and signed webhooks start jobs with per-automation caps; the definition repo is synced from GitHub and PRs to it get a validation check; the package mirror can read GitHub Packages through the App.
 
-Not verified live: none of M8 has run against real GitHub. It is tested against a fake GitHub and local git repos; the GitHub App setup in your org (spike S11 in the plan) and a real PR round trip are still to do.
+- **Scores and the Metrics page (M10, part A).** Every finished job is scored without a model first: gate result, fix attempts, rounds, the decision, whether a human stepped in, how it was delivered, whether it fell back to another model, time and cost. These roll up into a quality badge (`good`, `fair` or `poor`) shown on done cards. A nightly pass marks a merged job `reverted` if a revert commit lands later.
+  - **Judges.** Four starter scorers (`merge-readiness`, `spec-adherence`, `scope-creep`, `process-compliance`) ask a model from a different family than the builder to grade a sample of jobs (10% by default; `--force` runs them all). They live in `scorers/` in your definition repo. A definition repo made before M10 has none: copy `defaults/scorers/` and `defaults/roles/judge.md` into it and run `factory def sync`. A job is always scored against the definition it was created under.
+  - **Your labels come first.** `factory score label demo:001 merge-readiness A` stores your verdict, and the judge's answer stays hidden until you have given yours. A judge counts toward the Metrics page only after 30 labels, once it agrees with you well enough; until then every judge row says `uncalibrated (n of 30 labels)` and counts for nothing.
+  - **Commands.** `factory score REF [--scorer NAME] [--force] [--no-wait]` queues the judges on the worker and waits; `factory score calibration` shows how each judge agrees with you; `factory jobs show REF` has a Scores block.
+  - **Metrics page** (`#/metrics`): pass rate by role, model, engine and profile, rounds per job, escalation rate, cost per merged job, fallback rate, and each scorer's pass rate.
+
+Not verified live: the judges have never run against a real model, because no real builder run has succeeded yet. They are tested with fakes, and the live stack was checked up to the point where a model is needed.
+
+Not verified live (M8): none of M8 has run against real GitHub. It is tested against a fake GitHub and local git repos; the GitHub App setup in your org (spike S11 in the plan) and a real PR round trip are still to do.
 
 Run a real job from the command line (needs the gateway running and the Claude and Gemini models you use enabled):
 

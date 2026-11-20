@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
 GRAPH_VERSION = 1
+SCORE_RUN_TIMEOUT_S = 1800
 GRAPH_COMPAT: Mapping[int, frozenset[int]] = {1: frozenset({1})}
 NODE_NAMES = (
     "prepare",
@@ -198,6 +199,8 @@ def build_job_graph(
             kwargs["defer"] = True
         if name == "review":
             kwargs["input_schema"] = ReviewTask
+        if name == "score":
+            kwargs["timeout"] = TimeoutPolicy(run_timeout=SCORE_RUN_TIMEOUT_S)
         kwargs["error_handler"] = make_error_handler(name)
         g.add_node(name, _leased(deps, _paused(name, makers[name].make(deps))), **kwargs)
     g.add_edge(START, "prepare")

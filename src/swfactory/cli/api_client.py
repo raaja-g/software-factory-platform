@@ -22,6 +22,10 @@ class ApiError(Exception):
         self.detail = detail
 
 
+SCORE_POLL_S = 2.0
+SCORE_WAIT_S = 35 * 60.0  # SCORE_RUN_TIMEOUT_S (30 min) plus slack
+
+
 class RefreshTimeout(Exception):
     pass
 
@@ -118,8 +122,58 @@ class ApiClient:
             body = {"action": action, "note": note, "amount_usd": amount_usd}
         return self._call("POST", f"/api/jobs/{_ref(ref)}/actions", json=body)
 
+    def job_scores(self, ref: str) -> list[dict[str, Any]]:
+        return self._call("GET", f"/api/jobs/{_ref(ref)}/scores")
+
+    def job_judges(self, ref: str) -> list[dict[str, Any]]:
+        body = self._call("GET", f"/api/jobs/{_ref(ref)}/judges")
+        return body.get("scores", []) if isinstance(body, dict) else []
+
+    def score_job(
+        self, ref: str, scorers: list[str] | None = None, force: bool = False
+    ) -> dict[str, Any]:
+        body = {"force": force, "scorers": scorers or None}
+        return self._call("POST", f"/api/jobs/{_ref(ref)}/score", json=body)
+
+    def score_request(self, request_id: str) -> dict[str, Any]:
+        return self._call("GET", f"/api/score-requests/{quote(request_id, safe='')}")
+
+    def wait_score_request(
+        self,
+        request_id: str,
+        *,
+        poll_s: float | None = None,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
+        """Poll until the request is done or failed; raise RefreshTimeout after the wait."""
+        poll = SCORE_POLL_S if poll_s is None else poll_s
+        limit = SCORE_WAIT_S if timeout_s is None else timeout_s
+        waited = 0.0
+        while True:
+            st = self.score_request(request_id)
+            if st.get("status") in ("done", "failed"):
+                return st
+            if waited >= limit:
+                raise RefreshTimeout(
+                    f"scoring is still running (request {request_id}); "
+                    "see factory score REF later or check the job"
+                )
+            time.sleep(poll)
+            waited += poll
+
     def follow_up(self, ref: str, note: str) -> dict[str, Any]:
         return self._call("POST", f"/api/jobs/{_ref(ref)}/follow-up", json={"note": note})
+
+    # scoring
+    def label_score(self, ref: str, scorer: str, label: str) -> dict[str, Any]:
+        return self._call(
+            "PUT",
+            f"/api/jobs/{_ref(ref)}/scores/{quote(scorer, safe='')}/label",
+            json={"label": label},
+        )
+
+    def calibration(self) -> list[dict[str, Any]]:
+        return self._call("GET", "/api/scorers/calibration")
 
     # apps, login
     def list_apps(self) -> list[dict[str, Any]]:

@@ -301,6 +301,12 @@ class GitHubClient:
                 return pr
         return prs[0] if prs else None
 
+    async def list_commits(self, branch: str, since: datetime) -> list[dict[str, Any]]:
+        """Commits on ``branch`` since ``since`` (newest first), as the API returns them."""
+        return await self._pages(
+            f"{self._p}/commits", {"sha": branch, "since": _iso(since), "per_page": 100}
+        )
+
     async def get_pr(self, number: int) -> PullRef:
         return _pull((await self._read("GET", f"{self._p}/pulls/{number}")).json())
 

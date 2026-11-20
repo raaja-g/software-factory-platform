@@ -210,6 +210,7 @@ function cardEl(job) {
     h('span', { class: 'card-id' }, h('span', { class: 'num', text: num }), h('span', { class: 'slug', text: slug }), h('span', { class: 'app-tag', text: job.app })),
     h('span', { class: 'title', text: job.title || slug.replace(/-/g, ' ') }),
     job.stuck && h('span', { class: 'badge', text: 'No progress for 30 min' }),
+    job.quality && h('span', { class: `quality ${job.quality.badge}`, title: `${job.quality.judges_passed} of ${job.quality.judges_total} judges passed`, text: `Quality: ${job.quality.badge}` }),
     job.kind === 'requirements' && h('span', { class: 'badge kind-tag', text: 'Requirements' }),
     job.backlog_ref && h('span', { class: 'backlog-link', data: { ref: job.backlog_ref }, text: `Backlog ${job.backlog_ref}`, role: 'link', tabindex: '-1',
       on: { click: (e) => { e.preventDefault(); e.stopPropagation(); location.hash = `#/backlog/${encodeURIComponent(job.backlog_ref)}`; } } }),
@@ -325,7 +326,7 @@ setInterval(() => {
 
 /* ── drawer ─────────────────────────────────────── */
 const drawer = $('#drawer');
-const TABS = ['Files', 'Runs', 'Timeline', 'Triage'];
+const TABS = ['Files', 'Runs', 'Timeline', 'Triage', 'Scores'];
 
 function openDrawer(id) {
   const same = state.drawer && state.drawer.job_id === id;
@@ -524,6 +525,10 @@ async function loadTab(job, d) {
       fill(h('ol', { class: 'timeline' }, events.map((ev) => h('li', {},
         h('span', { class: 'muted', text: ago(ev.at) + ' ' }), h('span', { class: 'k', text: ev.kind }), ' ',
         h('span', { text: ev.data && Object.keys(ev.data).length ? JSON.stringify(ev.data) : '' })))));
+    } else if (d.tab === 'Scores') {
+      const out = await apiJson(jobPath(job, 'judges'));
+      if (stale()) return;
+      fill(scoresView(job, d, out.scores || []));
     } else if (d.tab === 'Triage') {
       const text = await fetchText(artifactUrl(job, 'triage.md'));
       if (stale()) return;
@@ -563,6 +568,31 @@ function runsTable(runs) {
       h('td', { text: money(r.cost_usd) }),
       h('td', { text: duration(r.started_at, r.finished_at) }),
       h('td', { text: r.status }))))));
+}
+function scoresView(job, d, rows) {
+  if (!rows.length) return h('p', { class: 'muted', text: 'No judge scores yet.' });
+  const msg = h('p', { class: 'status-line', role: 'status' });
+  const save = async (scorer, value) => {
+    if (!value) return;
+    try {
+      await apiJson(jobPath(job, `scores/${encodeURIComponent(scorer)}/label`), { method: 'PUT', json: { label: value } });
+      d.tabKey = null;
+      updateDrawer(true);
+    } catch (err) { msg.className = 'status-line err'; msg.textContent = err.message; }
+  };
+  return h('div', { class: 'scores' }, rows.map((r) => {
+    const sel = h('select', { 'aria-label': `Your label for ${r.scorer}`, disabled: !can('approver'),
+      on: { change: (e) => save(r.scorer, e.target.value) } },
+      h('option', { value: '', text: 'Choose' }),
+      (r.labels || []).map((l) => h('option', { value: l, text: l, selected: l === r.your_label })));
+    return h('div', { class: 'score-row', data: { scorer: r.scorer } },
+      h('h3', { text: r.scorer }),
+      h('span', { class: 'muted', text: r.judge_model }), ' ',
+      h('span', { class: 'badge', text: r.calibration }),
+      h('div', { class: 'field' }, h('label', { text: 'Your label ' }), sel),
+      r.hidden ? h('p', { class: 'muted', text: 'judge result hidden until you label' })
+        : h('p', {}, h('strong', { text: r.label }), r.reason ? ` ${r.reason}` : ''));
+  }), msg);
 }
 function correctionForm(job) {
   const ta = h('textarea', { id: 'triage-correction', 'aria-label': 'Correction', placeholder: 'What did triage get wrong?' });
@@ -756,9 +786,60 @@ async function showDefinition() {
     sync, msg));
 }
 
+const pct = (v) => (v === null || v === undefined ? 'n/a' : `${(v * 100).toFixed(0)}%`);
+function rateTable(title, rows, dimLabel) {
+  return h('div', { class: 'metric-block' }, h('h3', { text: title }),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
+      h('thead', {}, h('tr', {}, h('th', { text: dimLabel }), h('th', { text: 'Runs' }), h('th', { text: 'Pass rate' }))),
+      h('tbody', {}, rows.length ? rows.map((r) => h('tr', {}, h('td', { text: r.key }), h('td', { text: String(r.n) }), h('td', { text: pct(r.pass_rate) })))
+        : h('tr', {}, h('td', { colspan: '3', class: 'muted', text: 'No counted scores yet' }))))));
+}
+function figure(label, value, note) {
+  return h('div', { class: 'figure' }, h('span', { class: 'fig-label', text: label }), h('strong', { text: value }), note && h('span', { class: 'muted', text: note }));
+}
 async function showMetrics() {
-  const m = await apiJson('/api/metrics');
-  $('#main').replaceChildren(page('Metrics', h('p', { class: 'muted', text: m.message || 'Metrics are not available yet.' })));
+  const q = new URLSearchParams(location.hash.split('?')[1] || '');
+  const app = q.get('app') || '';
+  const days = q.get('days') || '30';
+  const params = new URLSearchParams({ days });
+  if (app) params.set('app', app);
+  const m = await apiJson(`/api/metrics?${params}`);
+  const go = (a, d) => { location.hash = `#/metrics?${new URLSearchParams({ ...(a ? { app: a } : {}), days: d })}`; };
+  const apps = state.board.apps || [];
+  const appSel = h('select', { id: 'metrics-app', on: { change: (e) => go(e.target.value, daySel.value) } },
+    h('option', { value: '', text: 'All apps' }), apps.map((a) => h('option', { value: a, text: a, selected: a === app })));
+  const daySel = h('select', { id: 'metrics-days', on: { change: (e) => go(appSel.value, e.target.value) } },
+    ['7', '30', '90'].map((d) => h('option', { value: d, text: `Last ${d} days`, selected: d === days })));
+  if (!m.available) {
+    $('#main').replaceChildren(page('Metrics', h('p', { class: 'muted', text: m.message || 'Metrics are not available yet.' })));
+    return;
+  }
+  const hist = m.rounds.histogram || [];
+  const top = Math.max(1, ...hist.map((b) => b.jobs));
+  const money6 = (v) => (v === null || v === undefined ? 'n/a' : '$' + Number(v).toFixed(2));
+  $('#main').replaceChildren(page('Metrics',
+    h('div', { class: 'filters' }, field('App', appSel), field('Window', daySel)),
+    h('div', { class: 'figures' },
+      figure('Jobs', String(m.jobs), `finished in ${m.window_days} days`),
+      figure('Escalation rate', pct(m.escalation_rate), 'jobs that waited for a person'),
+      figure('Cost per merged job', money6(m.cost_per_merged_usd), 'All spend divided by merged jobs'),
+      figure('Fallback rate', pct(m.fallback_rate), 'runs on a different model'),
+      figure('Mean rounds', m.rounds.mean === null ? 'n/a' : m.rounds.mean.toFixed(2))),
+    h('div', { class: 'metric-block' }, h('h3', { text: 'Rounds per job' }),
+      h('div', { class: 'hist' }, hist.length ? hist.map((b) => h('div', { class: 'bar', title: `${b.jobs} jobs` },
+        h('span', { class: 'fill', style: `height:${Math.round((b.jobs / top) * 100)}%` }),
+        h('span', { class: 'x', text: `${b.rounds}` }), h('span', { class: 'n', text: String(b.jobs) }))) : h('p', { class: 'muted', text: 'No finished jobs' }))),
+    rateTable('Pass rate by role', m.pass_rate.role, 'Role'),
+    rateTable('Pass rate by model', m.pass_rate.model, 'Model'),
+    rateTable('Pass rate by engine', m.pass_rate.engine, 'Engine'),
+    rateTable('Pass rate by profile', m.pass_rate.profile, 'Profile'),
+    h('div', { class: 'metric-block' }, h('h3', { text: 'Judges' }),
+      h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
+        h('thead', {}, h('tr', {}, ['Scorer', 'Judge model', 'Scores', 'Pass rate', 'Calibration'].map((c) => h('th', { text: c })))),
+        h('tbody', {}, m.scorers.length ? m.scorers.map((r) => h('tr', { class: r.calibrated ? '' : 'uncal' },
+          h('td', { text: r.scorer }), h('td', { text: r.judge_model }), h('td', { text: String(r.n) }), h('td', { text: pct(r.pass_rate) }),
+          h('td', { text: r.calibrated ? `calibrated, kappa ${r.kappa === null ? 'n/a' : r.kappa.toFixed(2)}` : `uncalibrated, not counted (${r.labels} labels)` })))
+          : h('tr', {}, h('td', { colspan: '5', class: 'muted', text: 'No judge scores yet' }))))))));
 }
 
 /* ── backlogs ───────────────────────────────────── */
@@ -866,7 +947,7 @@ async function route() {
   backlogView.ref = null;
   backlogView.reload = null;
   const parts = hash.split('/').filter(Boolean);
-  const head = parts[0] || '';
+  const head = (parts[0] || '').split('?')[0];
   if (head === 'job' && parts[1]) {
     if (state.view !== 'board') { state.view = 'board'; showBoardView(); }
     renderChrome();

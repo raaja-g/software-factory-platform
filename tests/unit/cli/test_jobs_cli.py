@@ -30,7 +30,7 @@ def test_jobs_list_and_show(mock_api):
     assert "todo:001 needs_human Add x" in run("jobs", "list").output
     out = run("jobs", "show", "todo/1").output
     assert "head: " + SHOWN_HEAD in out and "/#/job/" in out
-    assert mock_api.paths[-2] == "/api/jobs/todo:1"
+    assert "/api/jobs/todo:1" in mock_api.paths
 
 
 def test_approve_403_exits_1_with_detail(mock_api_403):

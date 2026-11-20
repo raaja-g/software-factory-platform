@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from typer.core import TyperGroup
 
 from swfactory.api.auth import TOKEN_DAYS_DEFAULT
 from swfactory.db.engine import make_engine, make_sessionmaker
@@ -608,17 +609,27 @@ def jobs_show(
 
     ref = _norm_ref(ref)
 
-    def fetch(c: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    def fetch(
+        c: Any,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         job = c.show_job(ref)
         try:
             runs = c.job_runs(ref)
         except ApiError:
             runs = []
-        return job, runs
+        try:
+            scores = c.job_scores(ref)
+        except ApiError:
+            scores = []
+        try:
+            judges = c.job_judges(ref) if any(_is_judge_row(r) for r in scores) else []
+        except ApiError:
+            judges = []
+        return job, runs, scores, judges
 
-    job, runs = _api_call(fetch)
+    job, runs, scores, judges = _api_call(fetch)
     if as_json:
-        typer.echo(json.dumps({**job, "runs": runs}, indent=2))
+        typer.echo(json.dumps({**job, "runs": runs, "scores": scores}, indent=2))
         return
     typer.echo(f"{job['ref']}  {job['title']}")
     typer.echo(f"stage: {job['stage']}  round: {job['round']}  head: {_head_sha(job) or '-'}")
@@ -637,7 +648,59 @@ def jobs_show(
         for role, m in seen.items():
             typer.echo(f"  {role}: {m}")
     typer.echo(f"cost: ${job['cost_usd']} of ${job['budget_usd']}")
+    block = _scores_line(scores)
+    judge_rows = [r for r in scores if _is_judge_row(r)]
+    if block or judge_rows:
+        typer.echo("Scores:")
+        if block:
+            typer.echo(f"  {block}")
+        for r in judge_rows:
+            typer.echo(f"  {_score_line(r, judges)}")
     typer.echo(_job_link(job["job_id"]))
+
+
+_SCORES_BLOCK = (
+    ("obj.gate", "gate {}"),
+    ("obj.fix_attempts", "fix attempts {}"),
+    ("obj.rounds", "rounds {}"),
+    ("obj.decision", "decision {}"),
+    ("obj.human", "human {}"),
+    ("obj.delivery", "delivery {}"),
+    ("obj.fallback", "fallback {}"),
+    ("obj.duration_s", "{}"),
+    ("obj.cost_usd", "{}"),
+    ("obj.quality", "quality {}"),
+)
+
+
+def _is_judge_row(r: dict[str, Any]) -> bool:
+    return not str(r["scorer"]).startswith("obj.")
+
+
+def _scores_line(scores: list[dict[str, Any]]) -> str:
+    """The objective signals in one line: gate passed · fix attempts 0 · ... · quality good."""
+    by = {str(r["scorer"]): str(r["label"]) for r in scores}
+    return " · ".join(fmt.format(by[name]) for name, fmt in _SCORES_BLOCK if name in by)
+
+
+def _score_line(r: dict[str, Any], judges: list[dict[str, Any]] | None = None) -> str:
+    status = {True: "passed", False: "failed", None: "-"}[r.get("passed")]
+    parts = [str(r["scorer"]), str(r["label"]), status]
+    if r.get("judge_model"):
+        parts.append(f"judge {r['judge_model']}")
+    parts.append(f"${r.get('cost_usd') or '0.000000'}")
+    if r.get("judge_model"):
+        tag = next(
+            (
+                j.get("calibration")
+                for j in judges or []
+                if j.get("scorer") == r["scorer"] and j.get("judge_model") == r["judge_model"]
+            ),
+            None,
+        )
+        if tag:
+            parts.append(str(tag))
+    return "  ".join(parts)
 
 
 @jobs_app.command("board")
@@ -798,6 +861,95 @@ def jobs_add_budget(
     ref = _norm_ref(job)
     _api_call(lambda c: c.action(ref, "add_budget", note, amount_usd=usd.strip()))
     typer.echo(f"add_budget {usd.strip()} sent to {ref}")
+
+
+class _ScoreGroup(TyperGroup):
+    """``factory score REF`` scores a job; ``label`` and ``calibration`` stay subcommands."""
+
+    def resolve_command(self, ctx: Any, args: list[str]) -> Any:
+        if args and args[0] not in self.commands and args[0] not in ("--help", "-h"):
+            return "run", self.commands["run"], args
+        return super().resolve_command(ctx, args)
+
+
+score_app = typer.Typer(help="Scoring commands", no_args_is_help=True, cls=_ScoreGroup)
+app.add_typer(score_app, name="score")
+
+
+@score_app.command("run", hidden=True)
+def score_cmd(
+    ref: Annotated[str, typer.Argument(help="Job uuid or <app>:<seq>")],
+    scorer: Annotated[
+        list[str] | None, typer.Option("--scorer", help="Judge scorer to run (repeatable)")
+    ] = None,
+    force: Annotated[bool, typer.Option("--force", help="Run every judge, sampled or not")] = False,
+    no_wait: Annotated[
+        bool, typer.Option("--no-wait", help="Queue the judges and return at once")
+    ] = False,
+):
+    """Score a finished job: objective rows now, the sampled (or chosen) judges on the worker."""
+    ref = _norm_ref(ref)
+    out = _api_call(lambda c: c.score_job(ref, scorer, force))
+    s = out["summary"]
+    rid = out.get("request_id")
+    errors: list[str] = list(s["errors"])
+    skipped: list[str] = list(s["judges_skipped"])
+    if rid and no_wait:
+        names = ", ".join(s.get("judges_pending") or []) or "-"
+        typer.echo(f"queued score request {rid} for {names}")
+        return
+    if rid:
+        st = _api_call(lambda c: c.wait_score_request(str(rid)))
+        if st["status"] == "failed":
+            typer.echo(f"scoring failed: {st.get('detail') or 'unknown error'}")
+            raise typer.Exit(1)
+        done = st.get("summary") or {}
+        skipped = list(done.get("judges_skipped", []))
+        errors = [*errors, *done.get("errors", [])]
+
+    def fetch(c: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        return c.job_scores(ref), c.job_judges(ref)
+
+    scores, judges = _api_call(fetch)
+    for r in scores:
+        if _is_judge_row(r):
+            typer.echo(_score_line(r, judges))
+    for line in (*skipped, *errors):
+        typer.echo(f"  {line}")
+
+
+@score_app.command("label")
+def score_label(
+    ref: Annotated[str, typer.Argument(help="Job uuid or <app>:<seq>")],
+    scorer: Annotated[str, typer.Argument(help="Scorer name")],
+    label: Annotated[str, typer.Argument(help="Your label for the job")],
+):
+    """Store your label for a job's scorer, then show what each judge said."""
+    from swfactory.scoring.calibration import CALIBRATION_MIN_LABELS
+
+    out = _api_call(lambda c: c.label_score(_norm_ref(ref), scorer, label))
+    judges = out.get("judges", [])
+    n = max((int(j.get("n") or 0) for j in judges), default=0)
+    typer.echo(
+        f"labelled {scorer} on {ref}: {out['label']} ({n} of {CALIBRATION_MIN_LABELS} labels)"
+    )
+    for j in judges:
+        typer.echo(f"  {j['judge_model']}: {j['label']} ({j['calibration']})  {j['reason'] or ''}")
+
+
+@score_app.command("calibration")
+def score_calibration():
+    """Show each judge's agreement with your labels."""
+    rows = _api_call(lambda c: c.calibration())
+    if not rows:
+        typer.echo("no labels yet")
+        return
+    for r in rows:
+        k = "-" if r["kappa"] is None else f"{r['kappa']:.2f}"
+        typer.echo(
+            f"{r['scorer']}  {r['judge_model']}  n={r['n']} pass={r['human_pass']} "
+            f"fail={r['human_fail']} kappa={k}  {r['tag']}"
+        )
 
 
 backlog_app = typer.Typer(help="Backlog commands", no_args_is_help=True)

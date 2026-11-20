@@ -555,11 +555,33 @@ class ScorerLabel(StrictModel):
     description: str
 
 
+class JudgeEntry(StrictModel):
+    model: str
+    fallback: tuple[str, ...] = ()
+    engine: Literal["direct"] = "direct"
+
+    def __init__(
+        self,
+        model: str | None = None,
+        fallback: tuple[str, ...] = (),
+        engine: str = "direct",
+        **data: Any,
+    ) -> None:
+        if model is not None:
+            data["model"] = model
+        super().__init__(**{"fallback": fallback, "engine": engine, **data})
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_alias(cls, data: Any) -> Any:
+        return {"model": data} if isinstance(data, str) else data
+
+
 class ScorerDef(StrictModel):
     labels: tuple[ScorerLabel, ...] = Field(min_length=1, max_length=20)
     passing_score: float = Field(ge=0, le=1)
     sampling_rate: float = Field(default=0.10, ge=0, le=1)
-    judge: str
+    judge: JudgeEntry
     applies_to: tuple[str, ...] = ()
     rubric: str = ""
 
@@ -800,7 +822,9 @@ def check_references(defn: Definition, policy: DefinitionPolicy) -> tuple[Defini
             ref(("automations", aname, "app"), f"unknown app '{auto.app}'")
 
     for sname, sc in defn.scorers.items():
-        check_model(("scorers", sname, "judge"), sc.judge)
+        check_model(("scorers", sname, "judge"), sc.judge.model)
+        for i, alias in enumerate(sc.judge.fallback):
+            check_model(("scorers", sname, "judge", "fallback", i), alias)
         scores = [lb.score for lb in sc.labels]
         if not any(x < sc.passing_score for x in scores):
             ref(

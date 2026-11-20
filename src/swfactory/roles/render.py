@@ -116,7 +116,7 @@ def _system_prompt(spec: RoleSpec, ctx: PromptContext) -> str:
     for name in PLACEHOLDERS:
         text = text.replace("{{" + name + "}}", values[name])
     if ctx.instructions:
-        text = f"{text}\n\n{ctx.instructions}"
+        text = f"{text}\n\n# Step instructions\n\n{ctx.instructions}"
     return text
 
 

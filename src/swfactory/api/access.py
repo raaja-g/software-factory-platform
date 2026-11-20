@@ -18,7 +18,7 @@ from swfactory.domain.types import FactoryMode
 if TYPE_CHECKING:
     from swfactory.definition.models import AppAccess, Definition
 
-__all__ = ["JobAccess", "app_role", "job_access", "visible_apps"]
+__all__ = ["JobAccess", "app_role", "authorize_job", "job_access", "visible_apps"]
 
 
 def app_role(role: str, email: str, access: AppAccess | None, *, mode: FactoryMode) -> str | None:
@@ -64,35 +64,41 @@ async def app_slug_of(s: Any, job: Job) -> str:
     return await s.scalar(select(App.slug).where(App.id == job.app_id)) or ""
 
 
+async def authorize_job(request: Request, principal: Principal, job: Job, need: str) -> JobAccess:
+    """404 for a hidden app, 403 below `need` on the job's app."""
+    deps = request.app.state.deps
+    mode: FactoryMode = request.app.state.mode
+    async with deps.sessions() as s:
+        slug = await app_slug_of(s, job)
+    try:
+        _, defn = await deps.definitions.active()
+    except NoActiveDefinition:
+        raise HTTPException(status_code=503, detail="no active definition") from None
+    visible = visible_apps(defn, principal, mode=mode)
+    app_def = defn.factory.apps.get(slug)
+    role = app_role(
+        principal.role, principal.email, None if app_def is None else app_def.access, mode=mode
+    )
+    if role is None or (visible is not None and slug not in visible):
+        raise HTTPException(status_code=404, detail="job not found")
+    if ROLE_RANK[role] < ROLE_RANK[need]:
+        raise HTTPException(status_code=403, detail=f"{need} role required for app '{slug}'")
+    return JobAccess(job, slug, role)
+
+
 def job_access(need: str) -> Callable[..., Awaitable[JobAccess]]:
     """Dependency for `{ref}` routes: 404 for a hidden app, 403 below `need` on the app."""
-    need_rank = ROLE_RANK[need]
 
     async def dependency(
         request: Request, ref: str, principal: Annotated[Principal, Depends(require("viewer"))]
     ) -> JobAccess:
         deps = request.app.state.deps
-        mode: FactoryMode = request.app.state.mode
         async with deps.sessions() as s:
             try:
                 job = await resolve_job_ref(s, ref)
             except JobRefError as e:
                 raise HTTPException(status_code=404, detail=str(e)) from None
-            slug = await app_slug_of(s, job)
-        try:
-            _, defn = await deps.definitions.active()
-        except NoActiveDefinition:
-            raise HTTPException(status_code=503, detail="no active definition") from None
-        visible = visible_apps(defn, principal, mode=mode)
-        app_def = defn.factory.apps.get(slug)
-        role = app_role(
-            principal.role, principal.email, None if app_def is None else app_def.access, mode=mode
-        )
-        if role is None or (visible is not None and slug not in visible):
-            raise HTTPException(status_code=404, detail="job not found")
-        if ROLE_RANK[role] < need_rank:
-            raise HTTPException(status_code=403, detail=f"{need} role required for app '{slug}'")
-        return JobAccess(job, slug, role)
+        return await authorize_job(request, principal, job, need)
 
     dependency._job_access = need  # type: ignore[attr-defined]  # noqa: SLF001
     return dependency

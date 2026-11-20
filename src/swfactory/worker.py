@@ -7,6 +7,7 @@ import contextlib
 import json
 import re
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -65,7 +66,7 @@ from swfactory.graph.build import (
     initial_state,
     node_timeouts,
 )
-from swfactory.graph.deps import Deps, unavailable
+from swfactory.graph.deps import Deps
 from swfactory.graph.steps import (
     _runner,
     job_head,
@@ -119,6 +120,7 @@ def build_worker_deps(
     from swfactory.costs.budgets import BudgetService
     from swfactory.gateway.client import GatewayClient
     from swfactory.models.catalog import Catalog
+    from swfactory.scoring.service import ScoringService
 
     artifacts = ArtifactStore(sessions, settings.artifacts_dir)
     events = EventBus(sessions, settings.libpq_dsn())
@@ -170,7 +172,7 @@ def build_worker_deps(
             roles=RoleLibrary(),
             triage=TriageService(definitions, artifacts),
             definitions=definitions,
-            scoring=unavailable("scoring", "M10"),
+            scoring=ScoringService(sessions, events, definitions, real_catalog),
             settings=settings,
             docker_client=lambda: docker.DockerClient(base_url=settings.docker_host),
         )
@@ -199,7 +201,7 @@ def build_worker_deps(
         roles=RoleLibrary(),
         triage=TriageService(definitions, artifacts),
         definitions=definitions,
-        scoring=unavailable("scoring", "M10"),
+        scoring=ScoringService(sessions, events, definitions, catalog),
         settings=settings,
     )
 
@@ -914,6 +916,40 @@ async def _expiry_loop(deps: Deps, interval_s: float = EXPIRY_TICK_S) -> None:
         await asyncio.sleep(interval_s)
 
 
+NIGHTLY_TICK_S = 300
+
+
+def make_commit_logs(settings: Settings) -> dict[str, Any]:
+    """Commit logs by repo kind: the local bare repos, and GitHub when credentials exist."""
+    from swfactory.scoring.objective import GitHubCommitLog, LocalCommitLog
+
+    logs: dict[str, Any] = {"local": LocalCommitLog(Path(settings.repos_dir))}
+    if settings.github_app_client_id or settings.github_token:
+        from swfactory.github.intake import make_client_factory
+
+        logs["github"] = GitHubCommitLog(make_client_factory(settings))
+    return logs
+
+
+async def nightly_scoring_tick(deps: Deps, logs: Mapping[str, Any]) -> None:
+    """One nightly-scoring pass (it runs once a day): never raises."""
+    from swfactory.scoring.objective import nightly_scoring
+
+    try:
+        changed = await nightly_scoring(deps.sessions, logs, now=datetime.now(UTC))
+        if changed:
+            log.info("scoring.nightly", jobs=changed)
+    except Exception as exc:
+        log.warning("scoring.nightly_failed", error=repr(exc))
+
+
+async def _nightly_loop(deps: Deps, settings: Settings, interval_s: float = NIGHTLY_TICK_S) -> None:
+    logs = make_commit_logs(settings)
+    while True:
+        await nightly_scoring_tick(deps, logs)
+        await asyncio.sleep(interval_s)
+
+
 async def _scheduler_loop(deps: Deps, interval_s: float | None = None) -> None:
     from swfactory.automations.scheduler import SCHEDULER_TICK_S, Scheduler
 
@@ -945,6 +981,26 @@ async def run_request_loop(
                 pass
         except Exception as exc:
             log.warning("run_request.failed", error=repr(exc))
+        await asyncio.sleep(interval_s)
+
+
+SCORE_REQUEST_TICK_S = 2.0
+
+
+async def score_request_loop(
+    deps: Deps, worker_id: str, interval_s: float = SCORE_REQUEST_TICK_S
+) -> None:
+    """Run the judges the API asked for (`factory score`): polls, never raises."""
+    from swfactory.scoring.requests import score_request_tick
+
+    while True:
+        try:
+            while await score_request_tick(deps, worker_id):
+                pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("score_request.failed", error=repr(exc))
         await asyncio.sleep(interval_s)
 
 
@@ -1079,7 +1135,9 @@ async def _loop(
     expirer = asyncio.create_task(_expiry_loop(deps))
     heart = asyncio.create_task(_heartbeat_loop(deps, worker_id, driving, renew_s))
     runner = asyncio.create_task(run_request_loop(deps, worker_id))
+    scorer_loop = asyncio.create_task(score_request_loop(deps, worker_id))
     scheduler = asyncio.create_task(_scheduler_loop(deps))
+    nightly = asyncio.create_task(_nightly_loop(deps, settings))
     github_poller = asyncio.create_task(_github_poll_loop(deps, settings))
     definition_sync = make_definition_sync(deps, settings)
     sync_tasks = (
@@ -1155,7 +1213,9 @@ async def _loop(
         expirer.cancel()
         heart.cancel()
         runner.cancel()
+        scorer_loop.cancel()
         scheduler.cancel()
+        nightly.cancel()
         github_poller.cancel()
         for t in sync_tasks:
             t.cancel()
@@ -1171,7 +1231,9 @@ async def _loop(
             workspaces,
             expirer,
             runner,
+            scorer_loop,
             scheduler,
+            nightly,
             github_poller,
             *sync_tasks,
             *([ticker] if ticker else []),

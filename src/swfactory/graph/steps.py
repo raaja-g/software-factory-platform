@@ -132,7 +132,7 @@ async def _progress_loop(deps: Deps, job_id: UUID, run_id: UUID) -> None:
 
 
 @asynccontextmanager
-async def _nullcontext(box: Sandbox):
+async def _nullcontext(box: Sandbox | None):
     yield box
 
 
@@ -402,7 +402,7 @@ async def _find_finished(
 
 async def _cleanup_stale(
     deps: Deps,
-    box: Sandbox,
+    box: Sandbox | None,
     job_id: UUID,
     role: Role,
     round: int,
@@ -414,7 +414,7 @@ async def _cleanup_stale(
         stale = await fail_stale_runs(s, job_id, role, round)
     for row in stale:
         await _revoke_stale(deps, row.id)
-    if stale and tool_policy == ToolPolicy.WRITE and not isolated:
+    if stale and tool_policy == ToolPolicy.WRITE and not isolated and box is not None:
         await box.restart()
         start_sha = next((r.meta["start_sha"] for r in stale if r.meta.get("start_sha")), None)
         if start_sha:
@@ -591,6 +591,7 @@ async def run_agent_step(
     choice: ModelChoice | None = None,
     sandbox: Sandbox | None = None,
     fan_out: int = 1,
+    instructions: str | None = None,
 ) -> StepOutcome:
     if tool_policy == ToolPolicy.READ_RUN and sandbox is None:
         raise ValueError("read_run requires an isolated sandbox")
@@ -601,8 +602,18 @@ async def run_agent_step(
         tool_policy = effective_tool_policy(spec.tool_policy, tool_policy)
         isolated = sandbox is not None
         # an isolated box is already running and owned by the caller
-        box = sandbox if sandbox is not None else await job_sandbox(deps, job_id)
-        async with running(box) if not isolated else _nullcontext(box):
+        no_box = (
+            sandbox is None
+            and choice is not None
+            and (engine or choice.engine) == "direct"
+            and not attachments
+        )
+        box: Sandbox | None
+        if no_box:
+            box = None  # a direct call without attachments needs no sandbox
+        else:
+            box = sandbox if sandbox is not None else await job_sandbox(deps, job_id)
+        async with running(box) if (box is not None and not isolated) else _nullcontext(box):
             outcome = await _run_in_box(
                 deps,
                 box,
@@ -624,15 +635,16 @@ async def run_agent_step(
                 defn=defn,
                 slug=slug,
                 resume=resume,
+                instructions=instructions or "",
             )
-            if role == Role.BUILDER and not isolated:
+            if role == Role.BUILDER and not isolated and box is not None:
                 await refresh_head(deps, job_id, box)
             return outcome
 
 
 async def _run_in_box(
     deps: Deps,
-    box: Sandbox,
+    box: Sandbox | None,
     *,
     job: Job,
     app: AppDef,
@@ -652,11 +664,12 @@ async def _run_in_box(
     fan_out: int = 1,
     isolated: bool = False,
     resume: bool = False,
+    instructions: str = "",
 ) -> StepOutcome:
     job_id = job.id
     defaults = defn.factory.defaults
     key = TIMEOUT_KEY[role]
-    head: str | None = await _head(box) if role in _HEAD_ROLES else None
+    head: str | None = await _head(box) if role in _HEAD_ROLES and box is not None else None
     found = await _find_finished(deps, job_id, role, round, occurrence, head)
     if found is not None:
         return await _outcome_of(deps, found, job_id, spec.contract, reused=True)
@@ -697,6 +710,7 @@ async def _run_in_box(
             deadline=deadline,
             resume=resume,
             continuity_override=resume_reason,
+            instructions=instructions,
         )
         outcome = run.outcome
         if run.model_failure is not None:
@@ -761,7 +775,7 @@ async def _continuity(
 
 async def _attempt(
     deps: Deps,
-    box: Sandbox,
+    box: Sandbox | None,
     *,
     job: Job,
     app: AppDef,
@@ -785,6 +799,7 @@ async def _attempt(
     deadline: float = float("inf"),
     resume: bool = False,
     continuity_override: str | None = None,
+    instructions: str = "",
 ) -> _Run:
     job_id = job.id
     # step 3: the budget gate, before any model is chosen or key minted
@@ -813,7 +828,8 @@ async def _attempt(
     known = [m.path for m in await deps.artifacts.list(job_id)]
     matched = [p for p in known if any(fnmatch.fnmatchcase(p, g) for g in spec.inputs)]
     paths = list(dict.fromkeys([*inputs, *matched]))
-    await deps.artifacts.materialize(job_id, box, paths)
+    if box is not None:
+        await deps.artifacts.materialize(job_id, box, paths)
     texts: dict[str, str] = {}
     for p in paths:
         t = await deps.artifacts.get_text(job_id, p)
@@ -829,7 +845,9 @@ async def _attempt(
     if role == Role.BUILDER:
         base_meta["continuity"] = continuity
     run_head = head
-    if tool_policy == ToolPolicy.WRITE or (role in _RECORD_HEAD_ROLES and run_head is None):
+    if box is not None and (
+        tool_policy == ToolPolicy.WRITE or (role in _RECORD_HEAD_ROLES and run_head is None)
+    ):
         run_head = await _head(box)
     if tool_policy == ToolPolicy.WRITE:
         base_meta["start_sha"] = run_head
@@ -868,6 +886,7 @@ async def _attempt(
             prev_session=prev_session,
             repairs=repairs,
             continuity_session=continuity_session,
+            instructions=instructions,
         )
         if run.repair is None:
             return run
@@ -877,7 +896,7 @@ async def _attempt(
 
 async def _run_once(
     deps: Deps,
-    box: Sandbox,
+    box: Sandbox | None,
     *,
     job: Job,
     defn: Definition,
@@ -904,6 +923,7 @@ async def _run_once(
     prev_session: str | None,
     repairs: int,
     continuity_session: str | None = None,
+    instructions: str = "",
 ) -> _Run:
     """One run: its own id, reservation, key and row; closed in the ``finally``."""
     job_id = job.id
@@ -925,7 +945,7 @@ async def _run_once(
                 model_alias=choice.model.alias,
                 head_sha=run_head,
                 meta=base_meta,
-                runner_digest=box.image_digest,
+                runner_digest=box.image_digest if box is not None else None,
                 run_id=new_id,
                 status=RunStatus.RUNNING.value,
                 decision_id=choice.decision_id,
@@ -962,6 +982,7 @@ async def _run_once(
                 output_path=out_path if writes else None,
                 workdir=workdir,
                 context_tokens=context_tokens_for(info),
+                instructions=instructions,
             )
             system, prompt = render_prompt(spec, ctx)
             run_meta: dict[str, Any] = {}
@@ -1035,11 +1056,12 @@ async def _run_once(
                     error = f"model unavailable: {cls}: {first}"
                     model_failure = _ModelFailure(choice.model.alias, cls)
             if writes:
-                if result is not None and status == RunStatus.OK:
+                if result is not None and status == RunStatus.OK and box is not None:
                     text_out = await box.read_text(out_path)
             else:
                 # code a read-only role ran could have planted a file here: never read it
-                await box.remove(out_path)
+                if box is not None:
+                    await box.remove(out_path)
                 if result is not None and status == RunStatus.OK:
                     text_out = result.output
             verdict: Verdict | None = None

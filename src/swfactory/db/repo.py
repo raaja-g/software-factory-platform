@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -9,7 +11,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, or_, select, text, update
+from sqlalchemy import and_, case, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,12 +19,15 @@ from swfactory.commands import GATE_ACTIONS, parse_job_ref
 from swfactory.db.tables import (
     AgentRun,
     App,
+    Artifact,
     BudgetReservation,
     CatalogModel,
     Command,
     Job,
     JobEvent,
+    JudgeLabel,
     ModelDecision,
+    Score,
     WebhookDelivery,
 )
 from swfactory.domain.types import (
@@ -37,6 +42,9 @@ from swfactory.domain.types import (
 )
 from swfactory.events import record_event
 from swfactory.models.catalog import ModelInfo
+from swfactory.scoring.calibration import Calibration, is_calibrated, kappa
+from swfactory.scoring.metrics import MetricJob, MetricScore, MetricsRows
+from swfactory.scoring.objective import JobFacts, ScoreRow
 
 
 class LeaseLost(Exception):
@@ -1165,4 +1173,280 @@ async def last_stage_at(s: AsyncSession, job_id: UUID) -> datetime | None:
         .where(JobEvent.job_id == job_id, JobEvent.kind == "job.stage")
         .order_by(JobEvent.id.desc())
         .limit(1)
+    )
+
+
+_VERIFY_JSON = re.compile(r"^verify/r(\d+)-a(\d+)\.json$")
+_HUMAN_SCORED = ("approve", "rework", "reject")
+
+
+async def load_job_facts(
+    s: AsyncSession, job_id: UUID, *, merge_policy: str | None = None
+) -> JobFacts:
+    """Everything the objective scorers read, from rows and events only (the gate is not re-run).
+
+    The merge policy is not stored on the job: pass it when known, otherwise a merge with a
+    pr_url is read as pr_manual and one without as local_merge.
+    """
+    job = await s.get_one(Job, job_id, populate_existing=True)
+    runs = (
+        await s.scalars(
+            select(AgentRun).where(AgentRun.job_id == job_id).order_by(AgentRun.started_at)
+        )
+    ).all()
+    arts = (
+        await s.scalars(
+            select(Artifact)
+            .where(Artifact.job_id == job_id, Artifact.path.like("verify/r%-a%.json"))
+            .order_by(Artifact.created_at)
+        )
+    ).all()
+    latest = {a.path: a for a in arts}  # later rows replace earlier ones for the same path
+    gates: list[dict[str, Any]] = []
+    for path, a in latest.items():
+        m = _VERIFY_JSON.match(path)
+        if m is None or a.content is None:
+            continue
+        body = json.loads(a.content)
+        gates.append({**body, "path": path, "round": int(m[1]), "attempt": int(m[2])})
+    gates.sort(key=lambda g: (g["round"], g["attempt"]))
+    actions = (
+        await s.scalars(
+            select(Command.action)
+            .where(
+                Command.job_id == job_id,
+                Command.consumed_at.is_not(None),
+                Command.action.in_(_HUMAN_SCORED),
+            )
+            .order_by(Command.created_at, Command.id)
+        )
+    ).all()
+
+    async def last_event(kind: str) -> dict[str, Any] | None:
+        row = await s.scalar(
+            select(JobEvent.data)
+            .where(JobEvent.job_id == job_id, JobEvent.kind == kind)
+            .order_by(JobEvent.id.desc())
+            .limit(1)
+        )
+        return None if row is None else dict(row)
+
+    delivery = await last_event("delivery.merged")
+    if merge_policy is None:
+        merge_policy = "pr_manual" if delivery and delivery.get("pr_url") else "local_merge"
+    jobd = {
+        "id": job.id,
+        "stage": job.stage,
+        "round": job.round,
+        "cost_usd": job.cost_usd,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "merge_policy": merge_policy,
+    }
+    rund = [
+        {
+            "id": r.id,
+            "role": r.role,
+            "round": r.round,
+            "attempt": r.attempt,
+            "status": r.status,
+            "verdict": r.verdict,
+            "fallback_detected": r.fallback_detected,
+            "cost_usd": r.cost_usd,
+            "error": r.error,
+        }
+        for r in runs
+    ]
+    return JobFacts(jobd, rund, gates, list(actions), await last_event("decision.made"), delivery)
+
+
+async def replace_scores(
+    s: AsyncSession, job_id: UUID, rows: Sequence[ScoreRow], *, scorers: Collection[str]
+) -> None:
+    """Delete the named scorers' rows for the job and insert ``rows``: re-scoring replaces."""
+    await s.execute(delete(Score).where(Score.job_id == job_id, Score.scorer.in_(list(scorers))))
+    s.add_all(
+        Score(
+            job_id=job_id,
+            run_id=r.run_id,
+            scorer=r.scorer,
+            label=r.label,
+            score=r.score,
+            passed=r.passed,
+            reason=r.reason,
+            judge_model=r.judge_model,
+            cost_usd=r.cost_usd,
+            rubric_sha=r.rubric_sha,
+            judge_sha=r.judge_sha,
+        )
+        for r in rows
+    )
+    await s.flush()
+
+
+async def put_judge_label(
+    s: AsyncSession, job_id: UUID, scorer: str, label: str, rubric_sha: str, labelled_by: str
+) -> None:
+    """Store your label for a job's scorer under the current rubric; a new one replaces the old."""
+    ins = pg_insert(JudgeLabel).values(
+        job_id=job_id, scorer=scorer, label=label, rubric_sha=rubric_sha, labelled_by=labelled_by
+    )
+    await s.execute(
+        ins.on_conflict_do_update(
+            index_elements=[JudgeLabel.job_id, JudgeLabel.scorer, JudgeLabel.rubric_sha],
+            set_={
+                "label": ins.excluded.label,
+                "labelled_by": ins.excluded.labelled_by,
+                "created_at": func.now(),
+            },
+        )
+    )
+
+
+async def job_judge_labels(s: AsyncSession, job_id: UUID) -> list[JudgeLabel]:
+    return list(await s.scalars(select(JudgeLabel).where(JudgeLabel.job_id == job_id)))
+
+
+async def calibration_table(
+    s: AsyncSession, scorers: Mapping[str, Any] | None = None
+) -> dict[tuple[str, str, str, str], Calibration]:
+    """Pair each human label with the job's latest judge row per judge; group by judge version.
+
+    ``scorers`` maps scorer name to its ``ScorerDef`` (for label scores); it defaults to the active
+    definition. A label no definition or judge row can place on the pass line is left out.
+    """
+    if scorers is None:
+        from swfactory.definition.store import load_active
+
+        active = await load_active(s)
+        scorers = {} if active is None else active[1].scorers
+    labels = list(await s.scalars(select(JudgeLabel)))
+    if not labels:
+        return {}
+    rows = list(
+        await s.scalars(
+            select(Score)
+            .where(
+                Score.job_id.in_({lb.job_id for lb in labels}),
+                Score.judge_model.is_not(None),
+                Score.rubric_sha.is_not(None),
+                Score.judge_sha.is_not(None),
+            )
+            .order_by(Score.created_at, Score.id)
+        )
+    )
+    latest: dict[tuple[UUID, str, str, str, str], Score] = {}
+    seen_label_pass: dict[tuple[str, str, str], bool] = {}
+    for r in rows:
+        assert r.rubric_sha and r.judge_sha and r.judge_model
+        if r.passed is not None:
+            latest[(r.job_id, r.scorer, r.rubric_sha, r.judge_model, r.judge_sha)] = r
+            seen_label_pass[(r.scorer, r.rubric_sha, r.label)] = r.passed
+    by_job: dict[tuple[UUID, str, str], list[Score]] = {}
+    for key, r in latest.items():
+        by_job.setdefault((key[0], key[1], key[2]), []).append(r)
+    groups: dict[tuple[str, str, str, str], list[tuple[bool, bool]]] = {}
+    for lb in labels:
+        human = _human_passed(scorers.get(lb.scorer), lb, seen_label_pass)
+        if human is None:
+            continue
+        for r in by_job.get((lb.job_id, lb.scorer, lb.rubric_sha), []):
+            assert r.passed is not None and r.judge_model and r.judge_sha
+            groups.setdefault((lb.scorer, r.judge_model, lb.rubric_sha, r.judge_sha), []).append(
+                (r.passed, human)
+            )
+    out: dict[tuple[str, str, str, str], Calibration] = {}
+    for key, pairs in groups.items():
+        hp = sum(1 for _, h in pairs if h)
+        hf = len(pairs) - hp
+        k = kappa(pairs)
+        out[key] = Calibration(
+            *key, len(pairs), hp, hf, k, is_calibrated(len(pairs), k, min_class=min(hp, hf))
+        )
+    return out
+
+
+def _human_passed(
+    scorer: Any, lb: JudgeLabel, seen: Mapping[tuple[str, str, str], bool]
+) -> bool | None:
+    if scorer is not None:
+        for d in scorer.labels:
+            if d.value == lb.label:
+                return bool(d.score >= scorer.passing_score)
+    return seen.get((lb.scorer, lb.rubric_sha, lb.label))
+
+
+async def job_judge_scores(s: AsyncSession, job_id: UUID) -> list[Score]:
+    """The job's judge rows, newest last."""
+    return list(
+        await s.scalars(
+            select(Score)
+            .where(Score.job_id == job_id, Score.judge_model.is_not(None))
+            .order_by(Score.created_at, Score.id)
+        )
+    )
+
+
+async def metrics_rows(
+    s: AsyncSession,
+    *,
+    app_slug: str | None,
+    since: datetime,
+    app_slugs: frozenset[str] | None = None,
+) -> MetricsRows:
+    """Normal jobs finished since ``since`` in ``app_slugs`` (None: every app), with scores."""
+    q = (
+        select(Job.id, Job.stage, Job.cost_usd, Job.round, Job.profile_name)
+        .join(App, App.id == Job.app_id)
+        .where(
+            Job.kind == JobKind.NORMAL.value,
+            Job.finished_at.is_not(None),
+            Job.finished_at >= since,
+        )
+    )
+    if app_slug is not None:
+        q = q.where(App.slug == app_slug)
+    if app_slugs is not None:
+        q = q.where(App.slug.in_(list(app_slugs)))
+    found = (await s.execute(q)).all()
+    ids = [r.id for r in found]
+    if not ids:
+        return MetricsRows()
+    waited = set(
+        await s.scalars(
+            select(JobEvent.job_id)
+            .where(JobEvent.job_id.in_(ids), JobEvent.kind == "human.waiting")
+            .distinct()
+        )
+    )
+    profile = {r.id: r.profile_name for r in found}
+    scored = (
+        await s.execute(
+            select(Score, AgentRun.role, AgentRun.model_alias, AgentRun.engine)
+            .outerjoin(AgentRun, AgentRun.id == Score.run_id)
+            .where(Score.job_id.in_(ids))
+        )
+    ).all()
+    scores = [
+        MetricScore(
+            sc.scorer, sc.passed, role, model, engine, profile.get(sc.job_id),
+            sc.judge_model, sc.rubric_sha, sc.judge_sha,
+        )
+        for sc, role, model, engine in scored
+        if sc.passed is not None and (sc.judge_model is not None or sc.scorer.startswith("obj."))
+    ]  # fmt: skip
+    runs, fallbacks = (
+        await s.execute(
+            select(
+                func.count(AgentRun.id),
+                func.count(AgentRun.id).filter(AgentRun.fallback_detected.is_(True)),
+            ).where(AgentRun.job_id.in_(ids))
+        )
+    ).one()
+    return MetricsRows(
+        scores=scores,
+        jobs=[MetricJob(r.stage, r.cost_usd, r.round, r.id in waited) for r in found],
+        runs=runs,
+        fallbacks=fallbacks,
+        calibration=await calibration_table(s),
     )

@@ -112,7 +112,15 @@ JOBS = [
     _job(6, "failed-one", "todo", "failed", "needs_human", retry_offered=True, files=[]),
     _job(7, "stuck", "shop", "build", "build", stuck=True, files=[]),
     _job(8, "xss", "shop", "build", "build", title=XSS, files=["logs/build.log"]),
-    _job(9, "done-one", "todo", "merged", "done", files=[]),
+    _job(
+        9,
+        "done-one",
+        "todo",
+        "merged",
+        "done",
+        files=[],
+        quality={"badge": "good", "judges_passed": 1, "judges_total": 2},
+    ),
     _job(10, "budget-stop", "todo", "needs_human", "needs_human", gate_reason="budget", files=[]),
     _job(
         11,
@@ -125,6 +133,22 @@ JOBS = [
         merge_policy="pr_manual",
     ),  # fmt: skip
 ]
+
+METRICS = {
+    "available": True, "window_days": 30, "jobs": 4, "escalation_rate": 0.25,
+    "cost_per_merged_usd": "3.000000", "fallback_rate": 0.1,
+    "rounds": {"mean": 1.5, "histogram": [{"rounds": 1, "jobs": 2}, {"rounds": 2, "jobs": 2}]},
+    "pass_rate": {
+        "role": [{"key": "builder", "n": 4, "pass_rate": 0.75}],
+        "model": [{"key": "opus", "n": 4, "pass_rate": 0.75}],
+        "engine": [{"key": "opencode", "n": 4, "pass_rate": 0.75}],
+        "profile": [{"key": "fast", "n": 4, "pass_rate": 0.75}],
+    },
+    "scorers": [
+        {"scorer": "merge-readiness", "judge_model": "gemini-lite@vertex", "n": 3,
+         "pass_rate": 0.5, "calibrated": False, "labels": 3, "kappa": None}
+    ],
+}  # fmt: skip
 
 FILES: dict[str, dict[str, str]] = {
     _jid(3): {"spec.md": SPEC_MD, "triage.md": "# Triage\nsmall change"},
@@ -195,6 +219,7 @@ class Rec:
         self.posts: list[tuple[str, Any]] = []
         self.gets: list[str] = []
         self.sse: list[str] = []
+        self.labelled: set[str] = set()
 
 
 _RECS: dict[int, Rec] = {}
@@ -267,7 +292,22 @@ def install(page: Page, role: str, sse_status: int = 200) -> Rec:
         if path == "/api/definition":
             return _json(route, DEFINITION)
         if path == "/api/metrics":
-            return _json(route, {"available": False, "message": "Metrics arrive with scoring."})
+            return _json(route, METRICS)
+        if path == "/api/jobs/todo:003/scores/merge-readiness/label" and req.method == "PUT":
+            r.posts.append((path, req.post_data_json))
+            r.labelled.add("merge-readiness")
+            return _json(route, {"stored": True})
+        if path == "/api/jobs/todo:003/judges":
+            shown = "merge-readiness" in r.labelled
+            row = {
+                "scorer": "merge-readiness", "judge_model": "gemini-lite@vertex",
+                "label": "B" if shown else None,
+                "reason": "needs a test for empty input" if shown else None,
+                "hidden": not shown, "your_label": "A" if shown else None,
+                "labels": ["A", "B", "C"],
+                "calibration": f"uncalibrated ({int(shown)} of 30 labels)",
+            }  # fmt: skip
+            return _json(route, {"scores": [row]})
         parts = path.split("/")  # "", api, jobs, ref, tail...
         if len(parts) >= 5 and parts[2] == "jobs":
             job = next((j for j in JOBS if j["ref"] == parts[3]), None)
@@ -512,7 +552,7 @@ def test_app_filter(page):
 
 def test_drawer_tabs_and_screenshot(page):
     open_card(page, "004")
-    assert tabs(page) == ["Files", "Runs", "Timeline", "Triage"]
+    assert tabs(page) == ["Files", "Runs", "Timeline", "Triage", "Scores"]
     expect(page.locator("img[src$='screenshots/home.png']")).to_be_visible()
 
 
@@ -720,3 +760,30 @@ def test_follow_up_button_only_on_delivered(page_approver):
     page_approver.keyboard.press("Escape")
     open_card(page_approver, "005")
     assert page_approver.get_by_role("button", name="Send back as a follow-up").count() == 0
+
+
+def test_label_control_is_blind(page):
+    open_card(page, "003")
+    click_tab(page, "Scores")
+    expect(page.get_by_text("needs a test for empty input")).to_have_count(0)
+    expect(page.get_by_text("judge result hidden until you label")).to_be_visible()
+    page.get_by_label("Your label for merge-readiness").select_option("A")
+    expect(page.get_by_text("needs a test for empty input")).to_be_visible()
+    expect(page.get_by_text("uncalibrated (1 of 30 labels)")).to_be_visible()
+    assert ("/api/jobs/todo:003/scores/merge-readiness/label", {"label": "A"}) in rec(page).posts
+
+
+@pytest.mark.ui
+def test_metrics_page(page: Page) -> None:
+    goto(page, "#/metrics")
+    expect(page.get_by_role("heading", name="Pass rate by role")).to_be_visible()
+    expect(page.get_by_text("Cost per merged job")).to_be_visible()
+    expect(page.get_by_text("uncalibrated, not counted")).to_be_visible()
+
+
+@pytest.mark.ui
+def test_done_card_quality_badge(page: Page) -> None:
+    badge = card_of(page, "009-done-one").get_by_text("Quality: good")
+    expect(badge).to_be_visible()
+    assert badge.get_attribute("title") == "1 of 2 judges passed"
+    expect(card_of(page, "011-delivered-one").get_by_text("Quality:")).to_have_count(0)

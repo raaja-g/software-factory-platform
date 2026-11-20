@@ -320,8 +320,43 @@ class Score(Base):
     passed: Mapped[bool | None] = mapped_column(Boolean)
     reason: Mapped[str | None] = mapped_column(Text)
     judge_model: Mapped[str | None] = mapped_column(Text)
+    rubric_sha: Mapped[str | None] = mapped_column(Text)
+    judge_sha: Mapped[str | None] = mapped_column(Text)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), server_default=text("0"))
     created_at: Mapped[datetime] = _ts()
+    __table_args__ = (Index("scores_job_id_scorer_idx", "job_id", "scorer"),)
+
+
+class JudgeLabel(Base):
+    __tablename__ = "judge_labels"
+    id: Mapped[uuid.UUID] = _pk()
+    job_id: Mapped[uuid.UUID] = _fk("app.jobs.id", nullable=False)
+    scorer: Mapped[str] = mapped_column(Text)
+    label: Mapped[str] = mapped_column(Text)
+    rubric_sha: Mapped[str] = mapped_column(Text)
+    labelled_by: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = _ts()
+    __table_args__ = (UniqueConstraint("job_id", "scorer", "rubric_sha"),)
+
+
+SCORE_REQUEST_STATUSES = ("pending", "running", "done", "failed")
+
+
+class ScoreRequest(Base):
+    """A request from the API for the worker to score a job (judges need the worker's agents)."""
+
+    __tablename__ = "score_requests"
+    id: Mapped[uuid.UUID] = _pk()
+    job_id: Mapped[uuid.UUID] = _fk("app.jobs.id", nullable=False)
+    scorers: Mapped[Any] = _jsonb()
+    force: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    requested_by: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, server_default="pending")
+    summary: Mapped[Any] = _jsonb()
+    detail: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _ts()
+    updated_at: Mapped[datetime] = _ts()
+    __table_args__ = (_check("score_requests", "status", SCORE_REQUEST_STATUSES),)
 
 
 class BenchRun(Base):
@@ -477,6 +512,12 @@ class AutomationFire(Base):
     automation: Mapped[str] = mapped_column(Text, primary_key=True)
     fire_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), primary_key=True)
     job_id: Mapped[uuid.UUID | None] = _fk("app.jobs.id")
+
+
+class MaintenanceRun(Base):
+    __tablename__ = "maintenance_runs"
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    last_run_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
 
 
 class WebhookDelivery(Base):

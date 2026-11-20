@@ -114,13 +114,6 @@ def test_definition_sync_notifies_and_returns_202(monkeypatch):
     assert r.status_code == 202 and sent == [{"reason": "api"}]
 
 
-def test_metrics_placeholder():
-    assert role_client("viewer").get("/api/metrics").json() == {
-        "available": False,
-        "message": "Metrics arrive with scoring (M10).",
-    }
-
-
 def test_apps_join_definition_and_stats(monkeypatch):
     async def stats(s, *, now):
         counts = dict.fromkeys(apps_routes.COLUMNS, 0) | {"build": 2}

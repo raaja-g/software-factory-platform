@@ -784,6 +784,34 @@
       "title": "ImproverConfig",
       "type": "object"
     },
+    "JudgeEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "const": "direct",
+          "default": "direct",
+          "title": "Engine",
+          "type": "string"
+        },
+        "fallback": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Fallback",
+          "type": "array"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "JudgeEntry",
+      "type": "object"
+    },
     "MergePolicy": {
       "enum": [
         "local_merge",
@@ -1237,8 +1265,7 @@
           "type": "array"
         },
         "judge": {
-          "title": "Judge",
-          "type": "string"
+          "$ref": "#/$defs/JudgeEntry"
         },
         "labels": {
           "items": {

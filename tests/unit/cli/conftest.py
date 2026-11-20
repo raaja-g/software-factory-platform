@@ -33,6 +33,25 @@ BACKLOG = {
 }  # fmt: skip
 
 
+SCORE_ROW = {
+    "scorer": "merge-readiness", "label": "B", "score": "0.7", "passed": True,
+    "reason": "ok", "judge_model": "gemini-lite@vertex", "cost_usd": "0.004100",
+    "run_id": None, "created_at": "2026-01-01T00:00:00+00:00",
+}  # fmt: skip
+SCORE_SUMMARY = {
+    "quality": "good", "rows": 12, "judges_run": 1,
+    "judges_skipped": ["scope-creep: not sampled"], "errors": [],
+}  # fmt: skip
+JUDGE_VIEW = {
+    "scorer": "merge-readiness", "judge_model": "gemini-lite@vertex", "label": None,
+    "reason": None, "hidden": True, "calibrated": False,
+    "calibration": "uncalibrated (0 of 30 labels)", "n": 0, "kappa": None,
+}  # fmt: skip
+LABEL_RESPONSE = {
+    "stored": True, "label": "A",
+    "judges": [{**JUDGE_VIEW, "label": "B", "reason": "needs a test", "hidden": False, "n": 1,
+                "calibration": "uncalibrated (1 of 30 labels)"}],
+}  # fmt: skip
 STARTED_RUN = {
     "status": "started", "app": "todo-app", "backlog": "todo-app:b001",
     "job_ref": "todo-app:001", "detail": None,
@@ -47,6 +66,11 @@ class MockApi:
         self.fail = fail
         self.polls = 0
         self.run_states: list[dict] = [STARTED_RUN]
+        self.scores: list[dict] = [SCORE_ROW]
+        self.score_post: dict | None = None
+        self.score_states: list[dict] = [
+            {"status": "done", "summary": SCORE_SUMMARY, "detail": None}
+        ]
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -66,6 +90,21 @@ class MockApi:
             return httpx.Response(201, json={"job_id": JOB["job_id"], "ref": "todo:001"})
         if path == "/api/jobs":
             return httpx.Response(200, json=[JOB])
+        if path.endswith("/scores"):
+            return httpx.Response(200, json=self.scores)
+        if path.endswith("/judges"):
+            return httpx.Response(200, json={"scores": [JUDGE_VIEW]})
+        if path.startswith("/api/score-requests/"):
+            state = (
+                self.score_states[0] if len(self.score_states) == 1 else self.score_states.pop(0)
+            )
+            return httpx.Response(200, json=state)
+        if path.endswith("/score") and request.method == "POST":
+            if self.score_post is not None:
+                return httpx.Response(202, json=self.score_post)
+            return httpx.Response(200, json={"summary": SCORE_SUMMARY, "scores": [SCORE_ROW]})
+        if request.method == "PUT" and path.endswith("/label"):
+            return httpx.Response(200, json=LABEL_RESPONSE)
         if path.endswith("/runs"):
             return httpx.Response(200, json=[])
         if path.startswith("/api/jobs/") and path.endswith("/follow-up"):
