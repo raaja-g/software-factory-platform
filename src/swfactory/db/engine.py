@@ -65,7 +65,13 @@ async def open_checkpointer(
     database_url: str, *, max_size: int = 4
 ) -> AsyncIterator[AsyncPostgresSaver]:
     pool = AsyncConnectionPool(
-        _conninfo(database_url), kwargs=checkpointer_pool_kwargs(), max_size=max_size, open=False
+        _conninfo(database_url),
+        kwargs=checkpointer_pool_kwargs(),
+        max_size=max_size,
+        # validate a connection when it is handed out: after a Postgres restart every idle pooled
+        # connection is dead, and without this each one fails a job step (three failures poison it)
+        check=AsyncConnectionPool.check_connection,
+        open=False,
     )
     await pool.open()
     try:
