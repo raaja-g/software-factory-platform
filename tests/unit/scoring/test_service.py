@@ -145,6 +145,41 @@ async def test_force_runs_all_with_next_occurrence(scored, monkeypatch):
 
 
 @pytest.mark.db
+async def test_each_judge_in_a_pass_gets_its_own_occurrence(scored, monkeypatch):
+    """The step runner reuses a finished run found by (job, role, round, occurrence). Judges
+    share the role, so judges after the first must not share its occurrence: with one number for
+    the whole pass, spec-adherence returned merge-readiness's stored answer ('unknown label A')."""
+    fj = FakeJudge(scored.sessions)
+    monkeypatch.setattr(svc_mod, "run_judge", fj)
+    await scored.svc.score_job(scored.deps, scored.job.id, force=True)
+    assert [n for n, _ in fj.calls] == [
+        "merge-readiness",
+        "process-compliance",
+        "scope-creep",
+        "spec-adherence",
+    ]
+    assert [o for _, o in fj.calls] == [1, 2, 3, 4]
+
+
+@pytest.mark.db
+async def test_a_failed_judge_does_not_use_up_an_occurrence(scored, monkeypatch):
+    """Only finished (ok) judge runs count: a judge that raised leaves the next one the same
+    number, which finds no finished run and so really runs."""
+    fj = FakeJudge(scored.sessions)
+
+    async def first_boom(deps, job_id, name, scorer, **kw):
+        if name == "merge-readiness":
+            fj.calls.append((name, kw["occurrence"]))
+            raise RuntimeError("boom")
+        return await fj(deps, job_id, name, scorer, **kw)
+
+    monkeypatch.setattr(svc_mod, "run_judge", first_boom)
+    s = await scored.svc.score_job(scored.deps, scored.job.id, force=True)
+    assert s.errors == ("judge merge-readiness: boom",)
+    assert [o for _, o in fj.calls] == [1, 1, 2, 3]
+
+
+@pytest.mark.db
 async def test_only_limits_judges(scored, monkeypatch):
     fj = FakeJudge(scored.sessions)
     monkeypatch.setattr(svc_mod, "run_judge", fj)

@@ -142,19 +142,9 @@ class ScoringService:
                             )
                         ).scalars()
                     )
-                    judge_ok = await s.scalar(
-                        select(func.count())
-                        .select_from(AgentRun)
-                        .where(
-                            AgentRun.job_id == job_id,
-                            AgentRun.role == Role.JUDGE.value,
-                            AgentRun.status == RunStatus.OK.value,
-                        )
-                    )
             except Exception as exc:
                 errors.append(f"judges: {exc}")
-                oks, judge_ok = [], 0
-            occurrence = int(judge_ok or 0) + 1
+                oks = []
             task = None
             if kind == JobKind.BENCHMARK.value:
                 from swfactory.bench.runner import trial_task
@@ -194,6 +184,11 @@ class ScoringService:
                     skipped.append(f"{name}: not sampled")
                     continue
                 try:
+                    # The step runner reuses a finished run it finds by (job, role, round,
+                    # occurrence), and every judge has the same role. So each judge needs the
+                    # next free number, counted now: one number for the whole pass made every
+                    # judge after the first return the first one's stored answer.
+                    occurrence = await self._finished_judge_runs(job_id) + 1
                     row = await run_judge(
                         deps,
                         job_id,
@@ -228,6 +223,19 @@ class ScoringService:
             except Exception as exc:
                 errors.append(f"benchmark: {exc}")
         return ScoreSummary(job_id, quality, rows, judges, tuple(skipped), tuple(errors))
+
+    async def _finished_judge_runs(self, job_id: UUID) -> int:
+        async with self.sessions() as s:
+            n = await s.scalar(
+                select(func.count())
+                .select_from(AgentRun)
+                .where(
+                    AgentRun.job_id == job_id,
+                    AgentRun.role == Role.JUDGE.value,
+                    AgentRun.status == RunStatus.OK.value,
+                )
+            )
+        return int(n or 0)
 
     async def _after_benchmark(self, job_id: UUID) -> None:
         """Fill the trial's result row; the job is done and scored by now."""
