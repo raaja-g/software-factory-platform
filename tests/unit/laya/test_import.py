@@ -179,12 +179,12 @@ async def test_imported_rows_count_toward_the_fit_minimum(db, tmp_path):  # noqa
     async with db() as s, s.begin():
         await seed_touches_ui(s, 10)
         await import_rows(
-            s, DEFN, question="touches_ui", path=csv_with(tmp_path, 1000, (500, 500)),
+            s, DEFN, question="touches_ui", path=csv_with(tmp_path, 500, (250, 250)),
             source="synth-v1", **KW,
         )  # fmt: skip
         h = await fit_question(s, URL, "k", "touches_ui", transport=FAKE_FIT)
-        assert h.rows == 1010
-        assert h.source_counts == {"own": 10, "external:synth-v1": 1000} and h.active is False
+        assert h.rows == 510  # under the fit's row cap, so every row is used
+        assert h.source_counts == {"own": 10, "external:synth-v1": 500} and h.active is False
         assert "external:synth-v1" in h.train_refs
 
 

@@ -1802,27 +1802,49 @@ def laya_fit(
     question: Annotated[
         str, typer.Option("--question", help="kind, size, risk, touches_ui or tier.<role>")
     ],
+    max_rows: Annotated[
+        int | None,
+        typer.Option(
+            "--max-rows",
+            min=50,
+            help="Most rows to train on: all your own rows stay, imported rows are sampled "
+            "(default 1000, about 11 minutes; the router trains on a CPU)",
+        ),
+    ] = None,
 ):
     """Fit a candidate head in the router (never activates it). Exit 2 refused, 3 router down."""
     from swfactory.laya.export import format_source_counts, known_question
     from swfactory.laya.fit import (
+        MAX_FIT_ROWS,
         FitRefused,
         RouterRefused,
         RouterUnreachable,
-        fit_question,
+        fit_with_sessions,
     )
 
     if not known_question(question):
         typer.echo(f"unknown question '{question}'", err=True)
         raise typer.Exit(2)
 
-    async def go(s, settings):
+    async def go():
+        # no transaction is open while the router trains: Postgres ends one that sits idle too long
+        settings = get_settings()
         key = settings.laya_api_key.get_secret_value() if settings.laya_api_key else ""
-        h = await fit_question(s, settings.laya_url or "", key, question)
-        return h.version, h.rows, h.source_counts
+        engine = make_engine(settings.sqlalchemy_url())
+        try:
+            h = await fit_with_sessions(
+                make_sessionmaker(engine),
+                settings.laya_url or "",
+                key,
+                question,
+                max_rows=max_rows or MAX_FIT_ROWS,
+            )
+            return h.version, h.rows, h.source_counts
+        finally:
+            await engine.dispose()
 
     try:
-        version, rows, counts = _laya_run(go)
+        version, rows, counts = asyncio.run(go())
     except FitRefused as e:
         msg = str(e)
         typer.echo(msg if msg.startswith("refused") else f"refused: {msg}", err=True)
