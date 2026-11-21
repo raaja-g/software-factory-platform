@@ -573,6 +573,19 @@ class ApiToken(Base):
     revoked_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
 
 
+class WebSession(Base):
+    """A dashboard login (personal mode); the cookie's secret is never stored, only its sha256."""
+
+    __tablename__ = "web_sessions"
+    id: Mapped[uuid.UUID] = _pk()
+    secret_hash: Mapped[str] = mapped_column(Text, unique=True)
+    binding: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = _ts()
+    expires_at: Mapped[datetime] = _ts(default=False)
+    revoked_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
+    last_seen_at: Mapped[datetime | None] = _ts(nullable=True, default=False)
+
+
 class BudgetReservation(Base):
     __tablename__ = "budget_reservations"
     run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)

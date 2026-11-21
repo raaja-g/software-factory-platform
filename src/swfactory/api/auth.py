@@ -19,6 +19,7 @@ from google.auth import jwt as google_jwt
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from swfactory.api.sessions import WebSessionStore
 from swfactory.db.tables import ApiToken, User
 from swfactory.domain.types import FactoryMode
 from swfactory.settings import Settings
@@ -115,10 +116,6 @@ def load_personal_token(settings: Settings) -> str:
         "personal mode needs FACTORY_API_TOKEN or a token file "
         f"({settings.api_token_file}); create one with: factory token init"
     )
-
-
-def session_value(token: str) -> str:
-    return hmac.new(token.encode(), b"session", hashlib.sha256).hexdigest()
 
 
 @dataclass
@@ -245,6 +242,13 @@ def _bearer(request: Request) -> str | None:
     return None
 
 
+def web_sessions_of(app: Any) -> WebSessionStore:
+    """The database-backed store when the app has one, else the app's own in-memory store."""
+    deps = app.state.deps
+    store: WebSessionStore | None = getattr(deps, "web_sessions", None)
+    return store if store is not None else app.state.memory_web_sessions
+
+
 def _unauthorized() -> HTTPException:
     return HTTPException(status_code=401, detail="unauthorized")
 
@@ -258,7 +262,7 @@ async def current_principal(request: Request) -> Principal:
         if bearer is not None and hmac.compare_digest(bearer.encode(), token.encode()):
             return Principal(settings.local_user, "admin", "token")
         cookie = request.cookies.get(SESSION_COOKIE)
-        if cookie and hmac.compare_digest(cookie.encode(), session_value(token).encode()):
+        if cookie and await web_sessions_of(request.app).valid(cookie, state.session_binding):
             return Principal(settings.local_user, "admin", "cookie")
         raise _unauthorized()
     users: UserDirectory = state.deps.users

@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 from swfactory.api.app import ApiDeps
 from swfactory.api.auth import IAP_ISSUER, hash_token
+from swfactory.api.sessions import InMemoryWebSessionStore
 from swfactory.definition.store import NoActiveDefinition
 from swfactory.domain.types import FactoryMode
 from swfactory.settings import Settings
@@ -82,7 +83,7 @@ class FakeDefinitions:
         return "sha", SimpleNamespace(factory=SimpleNamespace(apps={}))
 
 
-def fake_deps(s=None, *, active=True):
+def fake_deps(s=None, *, active=True, web_sessions=None):
     return ApiDeps(
         sessions=lambda: _Session(),  # pyright: ignore[reportArgumentType]
         events=SimpleNamespace(),  # pyright: ignore[reportArgumentType]
@@ -92,6 +93,7 @@ def fake_deps(s=None, *, active=True):
         users=FakeUsers(),  # pyright: ignore[reportArgumentType]
         writer=None,
         settings=s or settings(),
+        web_sessions=web_sessions if web_sessions is not None else InMemoryWebSessionStore(),
     )
 
 

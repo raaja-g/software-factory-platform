@@ -24,7 +24,6 @@ from swfactory.api.auth import (
     load_personal_token,
     new_token,
     origin_allowed,
-    session_value,
     token_usable,
     verify_iap_assertion,
 )
@@ -50,7 +49,8 @@ def client_personal():
 @pytest.fixture
 def client_personal_cookie():
     c = make_client(settings())
-    c.cookies.set("sf_session", session_value(PERSONAL_TOKEN))
+    login_code = c.post("/api/login-code", headers=bearer(PERSONAL_TOKEN)).json()["code"]
+    c.get(f"/login?code={login_code}", follow_redirects=False)  # the client keeps the cookie
     return c
 
 
@@ -234,7 +234,6 @@ def test_token_usable():
 def test_token_helpers():
     t = new_token()
     assert t.startswith("sfp_") and len(hash_token(t)) == 64
-    assert session_value("a") != session_value("b")
 
 
 def test_login_codes_expire():

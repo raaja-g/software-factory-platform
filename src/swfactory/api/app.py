@@ -6,7 +6,7 @@ import hmac
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Protocol
 
@@ -33,7 +33,7 @@ from swfactory.api.auth import (
     load_personal_token,
     origin_allowed,
     resolve_mode,
-    session_value,
+    web_sessions_of,
 )
 from swfactory.api.routes import apps as apps_routes
 from swfactory.api.routes import backlogs as backlogs_routes
@@ -47,6 +47,12 @@ from swfactory.api.routes import metrics as metrics_routes
 from swfactory.api.routes import models as models_routes
 from swfactory.api.routes import profiles as profiles_routes
 from swfactory.api.routes import runs as runs_routes
+from swfactory.api.sessions import (
+    InMemoryWebSessionStore,
+    SqlWebSessionStore,
+    WebSessionStore,
+    session_binding,
+)
 from swfactory.api.sse import router as sse_router
 from swfactory.artifacts import ArtifactStore
 from swfactory.db.engine import make_engine, make_sessionmaker
@@ -109,6 +115,7 @@ class ApiDeps:
     users: UserDirectory
     writer: DefinitionWriter | None
     settings: Settings
+    web_sessions: WebSessionStore | None = None  # None: the app keeps them in memory
 
 
 async def alive_workers(deps: ApiDeps) -> int:
@@ -193,6 +200,7 @@ def _build_deps(settings: Settings, mode: FactoryMode) -> tuple[ApiDeps, Any]:
         users=UserDirectory(sessions),
         writer=_server_writer(settings, mode),
         settings=settings,
+        web_sessions=SqlWebSessionStore(sessions),
     )
     return deps, engine
 
@@ -231,6 +239,8 @@ def create_app(
     app.state.mode = mode
     app.state.deps = deps
     app.state.personal_token = personal_token
+    app.state.session_binding = session_binding(settings, personal_token)
+    app.state.memory_web_sessions = InMemoryWebSessionStore()
     app.state.login_throttle = LoginThrottle()
     app.state.login_codes = LoginCodes()
     app.state.iap_keys = iap_keys or IapKeys()
@@ -288,18 +298,21 @@ def create_app(
         if not code or not request.app.state.login_codes.redeem(code):
             raise HTTPException(status_code=401, detail="unauthorized")
         response = RedirectResponse("/", status_code=303)
-        _set_session(response)
+        await _start_session(request, response)
         return response
 
-    def _set_session(response: Response) -> None:
+    async def _start_session(request: Request, response: Response) -> None:
+        """Both login paths: a new random session on the server, its secret in the cookie."""
+        ttl = timedelta(days=settings.session_days)
+        secret = await web_sessions_of(request.app).create(request.app.state.session_binding, ttl)
         response.set_cookie(
             SESSION_COOKIE,
-            session_value(personal_token),
+            secret,
             httponly=True,
             samesite="strict",
             path="/",
             secure=False,
-            max_age=settings.session_days * 86400,
+            max_age=int(ttl.total_seconds()),
         )
 
     api = APIRouter(prefix="/api")
@@ -360,13 +373,16 @@ def create_app(
             return JSONResponse({"detail": "wrong username or password"}, status_code=401)
         throttle.succeeded()
         response = JSONResponse({"ok": True})
-        _set_session(response)
+        await _start_session(request, response)
         return response
 
     @api.post("/logout")
-    async def logout() -> Response:
+    async def logout(request: Request) -> Response:
         if mode is not FactoryMode.PERSONAL:
             raise HTTPException(status_code=404)
+        cookie = request.cookies.get(SESSION_COOKIE)
+        if cookie:
+            await web_sessions_of(request.app).revoke(cookie)
         response = JSONResponse({"ok": True})
         response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, samesite="strict")
         return response
