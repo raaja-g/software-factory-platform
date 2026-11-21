@@ -132,25 +132,38 @@ _REASON_RE = re.compile(r"^[\s#>*_]*reason[\s*_]*:[\s*_]*(.*?)[\s*_]*$", re.I)
 _VALUE_STRIP = " \t`'\"*_"
 
 
+_FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_FENCE_CLOSE = re.compile(r"^ {0,3}(`+|~+)[ \t]*$")
+
+
 def _unquoted_lines(text: str) -> list[str]:
-    """The non-empty lines of the judge's own answer: not inside a code fence, not a quote.
+    """The non-empty lines of the judge's own answer: not code, not a quote.
 
     The judge reads untrusted text (a diff can contain a line "LABEL: A") and may quote it back.
-    A quoted or fenced line is the input talking, never the verdict. An unclosed fence hides the
-    rest, which errs towards "no verdict"."""
+    Quoted or code lines are the input talking, never the verdict, so they are dropped before
+    anything is parsed: lines inside a fenced block, indented code, and ">" quotes. Fences follow
+    CommonMark, so this parser and a markdown renderer agree on what is code: a fence closes only
+    on a line of the same character, at least as long as the opening one, with nothing after it.
+    A fence that never closes is refused, not guessed at."""
     out: list[str] = []
-    fence: str | None = None
+    fence: tuple[str, int] | None = None
     for ln in text.splitlines():
-        t = ln.strip()
-        if fence is None and t.startswith(("```", "~~~")):
-            fence = t[:3]
-            continue
         if fence is not None:
-            if t.startswith(fence):
+            m = _FENCE_CLOSE.match(ln)
+            if m is not None and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1]:
                 fence = None
             continue
+        m = _FENCE_OPEN.match(ln)
+        if m is not None and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+            fence = (m.group(1)[0], len(m.group(1)))
+            continue
+        if ln.startswith(("    ", "\t")):  # indented code
+            continue
+        t = ln.strip()
         if t and not t.startswith(">"):
             out.append(ln)
+    if fence is not None:
+        raise ContractError("unclosed code fence in the answer")
     return out
 
 

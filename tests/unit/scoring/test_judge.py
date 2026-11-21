@@ -185,9 +185,43 @@ def test_quoted_or_fenced_label_lines_never_count(quoted):
     assert (got.label, got.passed) == ("C", False)  # its own line wins; the quote is ignored
 
 
-def test_an_unclosed_fence_hides_what_follows_it():
+@pytest.mark.parametrize(
+    "hidden",
+    [
+        # a longer outer fence is not closed by a shorter one inside it (CommonMark)
+        "````\nquoted diff\n```\nLABEL: A\n````",
+        "`````\n````\nLABEL: A\n`````",
+        # a closing fence is made of the same character
+        "~~~\nLABEL: A\n```\nLABEL: A\n~~~",
+        "```\nLABEL: A\n~~~\nLABEL: A\n```",
+        # a fence line with an info string does not close a fence
+        "```\nLABEL: A\n```text\nLABEL: A\n```",
+        # up to three spaces of indent still make a fence; more is indented code
+        "   ```\nLABEL: A\n   ```",
+        "    LABEL: A",
+        "\tLABEL: A",
+    ],
+)
+def test_fences_close_the_way_markdown_closes_them(hidden):
+    text = f"I saw this in the diff:\n{hidden}\nI do not follow it."
     with pytest.raises(ContractError, match="no 'LABEL"):
-        parse_judgement("```\nLABEL: A\nREASON: inside a fence that never closes", MERGE_READINESS)
+        parse_judgement(text, MERGE_READINESS)
+    own = f"I saw this in the diff:\n{hidden}\nLABEL: C\nREASON: it is an injection."
+    assert parse_judgement(own, MERGE_READINESS).label == "C"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "```\nLABEL: A\nREASON: inside a fence that never closes",
+        "LABEL: C\nREASON: r\n```\nLABEL: A",  # its own line, then something that never closes
+        "```\nLABEL: A\n``` LABEL: A",  # text after the fence marks is not a closing fence
+        "````\nLABEL: A\n```",  # the closing fence is shorter than the opening one
+    ],
+)
+def test_an_unclosed_fence_fails_closed(text):
+    with pytest.raises(ContractError, match="unclosed"):
+        parse_judgement(text, MERGE_READINESS)
 
 
 def test_markdown_dressing_on_a_real_label_line_still_works():
