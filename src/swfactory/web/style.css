@@ -259,3 +259,12 @@ form.login .btn{padding:10px 12px;font-size:14px}
 
 /* the hidden attribute must win over any display rule (the nav is hidden before sign-in) */
 [hidden]{display:none!important}
+.label-progress{margin:0 0 12px}
+.meter{height:8px;max-width:360px;margin:6px 0;border-radius:4px;background:var(--lane);overflow:hidden}
+.meter .fill{display:block;height:100%;background:var(--pass)}
+.label-buttons{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px;position:sticky;top:0;padding:8px 0;background:var(--ground)}
+.label-btn{padding:10px 12px;font-size:13px}
+.label-btn.pass{border-color:var(--pass)}
+.label-btn.fail{border-color:var(--andon)}
+.label-job h4{margin:14px 0 6px;font:700 13px/1.2 var(--display);letter-spacing:.05em}
+pre.diff{max-height:28rem;overflow:auto;margin:0;padding:10px;border:1px solid var(--rule);border-radius:6px;background:var(--panel);font:12px/1.45 var(--mono);white-space:pre}

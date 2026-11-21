@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select, text
@@ -29,6 +29,7 @@ from swfactory.db.repo import (
     calibration_table,
     job_judge_labels,
     job_judge_scores,
+    label_queue,
     latest_waiting,
     list_jobs,
     put_judge_label,
@@ -40,7 +41,11 @@ from swfactory.domain.types import HumanAction, Stage
 from swfactory.github.followup import start_follow_up
 from swfactory.graph.steps import pinned_definition
 from swfactory.queue import UnknownApp, enqueue_job
-from swfactory.scoring.calibration import calibration_tag
+from swfactory.scoring.calibration import (
+    CALIBRATION_MIN_LABELS,
+    CALIBRATION_MIN_PER_CLASS,
+    calibration_tag,
+)
 from swfactory.scoring.judge import rubric_sha
 from swfactory.scoring.requests import create_score_request, get_score_request
 
@@ -563,6 +568,65 @@ async def put_label(
         for r in latest.values()
     ]
     return {"stored": True, "label": body.label, "judges": judges}
+
+
+@router.get("/labels/queue")
+async def get_label_queue(
+    request: Request,
+    principal: Annotated[Principal, Depends(require("approver"))],
+    scorer: str = "merge-readiness",
+    app: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> dict[str, Any]:
+    """Finished jobs waiting for your label, oldest first, and how far calibration has got.
+
+    Only jobs whose judge has already answered are listed (a label counts against that answer);
+    the answer itself stays hidden until the label is stored."""
+    defn = await _active(request)
+    sd = defn.scorers.get(scorer)
+    if sd is None:
+        raise HTTPException(status_code=404, detail=f"unknown scorer '{scorer}'")
+    visible = visible_apps(defn, principal, mode=request.app.state.mode)
+    if app is not None:
+        if app not in defn.factory.apps or (visible is not None and app not in visible):
+            raise HTTPException(status_code=404, detail=f"no app {app!r}")
+        visible = frozenset({app})
+    sha = rubric_sha(sd)
+    async with _deps(request).sessions() as s:
+        queue = await label_queue(
+            s, scorer, sha, roles=tuple(sd.applies_to), app_slugs=visible, limit=limit
+        )
+        table = await calibration_table(s, defn.scorers)
+    mine = [c for k, c in table.items() if k[0] == scorer and k[2] == sha]
+    best = max(mine, key=lambda c: c.n, default=None)
+    return {
+        "scorer": scorer,
+        "labels": [
+            {
+                "value": lb.value,
+                "score": lb.score,
+                "description": lb.description,
+                "passes": lb.score >= sd.passing_score,
+            }
+            for lb in sd.labels
+        ],
+        "jobs": [
+            {"ref": j.ref, "title": j.title, "stage": j.stage, "app": j.app} for j in queue.jobs
+        ],
+        "total": queue.total,
+        "awaiting_judge": queue.awaiting_judge,
+        "progress": {
+            "n": 0 if best is None else best.n,
+            "human_pass": 0 if best is None else best.human_pass,
+            "human_fail": 0 if best is None else best.human_fail,
+            "kappa": None if best is None else best.kappa,
+            "calibrated": bool(best and best.calibrated),
+            "judge_model": None if best is None else best.judge_model,
+            "tag": calibration_tag(best),
+            "needed": CALIBRATION_MIN_LABELS,
+            "per_class": CALIBRATION_MIN_PER_CLASS,
+        },
+    }
 
 
 @router.get("/scorers/calibration")

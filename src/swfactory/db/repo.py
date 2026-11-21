@@ -11,11 +11,11 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, case, delete, func, or_, select, text, update
+from sqlalchemy import and_, case, delete, exists, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from swfactory.commands import GATE_ACTIONS, parse_job_ref
+from swfactory.commands import GATE_ACTIONS, format_job_ref, parse_job_ref
 from swfactory.db.tables import (
     AgentRun,
     App,
@@ -1310,6 +1310,78 @@ async def put_judge_label(
 
 async def job_judge_labels(s: AsyncSession, job_id: UUID) -> list[JudgeLabel]:
     return list(await s.scalars(select(JudgeLabel).where(JudgeLabel.job_id == job_id)))
+
+
+@dataclass(frozen=True, slots=True)
+class QueueJob:
+    ref: str
+    title: str
+    stage: str
+    app: str
+
+
+@dataclass(frozen=True, slots=True)
+class LabelQueue:
+    jobs: list[QueueJob]  # oldest first, at most ``limit``
+    total: int  # all jobs waiting for your label
+    awaiting_judge: int  # finished jobs with no valid judge verdict yet (so nothing to pair)
+
+
+async def label_queue(
+    s: AsyncSession,
+    scorer: str,
+    rubric_sha: str,
+    *,
+    roles: Sequence[str] = (),
+    app_slugs: Collection[str] | None = None,
+    limit: int = 50,
+) -> LabelQueue:
+    """Finished jobs whose judge has answered but that you have not labelled, for one rubric.
+
+    A label only counts against a valid judge verdict on the same rubric (see
+    ``calibration_table``), so a job without one is counted in ``awaiting_judge``, never listed.
+    ``roles`` limits it to jobs where one of those roles ran ok (the scorer's ``applies_to``)."""
+    verdict = exists().where(
+        Score.job_id == Job.id,
+        Score.scorer == scorer,
+        Score.rubric_sha == rubric_sha,
+        Score.judge_model.is_not(None),
+        Score.judge_sha.is_not(None),
+        Score.passed.is_not(None),
+    )
+    labelled = exists().where(
+        JudgeLabel.job_id == Job.id,
+        JudgeLabel.scorer == scorer,
+        JudgeLabel.rubric_sha == rubric_sha,
+    )
+    scope = [Job.kind == JobKind.NORMAL.value, Job.finished_at.is_not(None)]
+    if app_slugs is not None:
+        scope.append(App.slug.in_(list(app_slugs)))
+    if roles:
+        scope.append(
+            exists().where(
+                AgentRun.job_id == Job.id,
+                AgentRun.role.in_(list(roles)),
+                AgentRun.status == RunStatus.OK.value,
+            )
+        )
+    base = select(Job.seq, Job.title, Job.stage, App.slug).join(App, App.id == Job.app_id)
+    rows = (
+        await s.execute(
+            base.where(*scope, verdict, ~labelled).order_by(Job.finished_at, Job.id).limit(limit)
+        )
+    ).all()
+    count = select(func.count()).select_from(Job).join(App, App.id == Job.app_id)
+    total = await s.scalar(count.where(*scope, verdict, ~labelled))
+    awaiting = await s.scalar(count.where(*scope, ~verdict))
+    return LabelQueue(
+        [
+            QueueJob(format_job_ref(slug, seq), title, stage, slug)
+            for seq, title, stage, slug in rows
+        ],
+        int(total or 0),
+        int(awaiting or 0),
+    )
 
 
 async def calibration_table(

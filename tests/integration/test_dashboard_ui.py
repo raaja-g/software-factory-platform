@@ -217,11 +217,29 @@ METRICS = {
 }  # fmt: skip
 
 FILES: dict[str, dict[str, str]] = {
-    _jid(3): {"spec.md": SPEC_MD, "triage.md": "# Triage\nsmall change"},
+    _jid(1): {"feature.md": "Add a clamp function"},
+    _jid(3): {
+        "spec.md": SPEC_MD,
+        "triage.md": "# Triage\nsmall change",
+        "feature.md": "Add a slugify function",
+        "diff.patch": f"+def slugify(t):\n+    return t  # {XSS}\n" + "+x\n" * 400,
+        "verify.md": "# Verify\n\nStatus: PASSED\n",
+        "decision.md": "APPROVE\nlooks good",
+    },
     _jid(4): {"spec.md": "# Gallery"},
     _jid(5): {"spec.md": "# Gate"},
     _jid(8): {"logs/build.log": f"line {XSS}\n"},
 }
+
+QUEUE_LABELS = [
+    {"value": "A", "score": 1.0, "description": "Could merge as is.", "passes": True},
+    {"value": "B", "score": 0.7, "description": "Needs small fixes.", "passes": True},
+    {"value": "C", "score": 0.0, "description": "Wrong or out of scope.", "passes": False},
+]
+QUEUE_JOBS = [
+    {"ref": "todo:003", "title": "todo web", "stage": "merged", "app": "todo"},
+    {"ref": "shop:001", "title": "queued one", "stage": "closed", "app": "shop"},
+]
 
 RUNS = [
     {
@@ -286,6 +304,7 @@ class Rec:
         self.gets: list[str] = []
         self.sse: list[str] = []
         self.labelled: set[str] = set()
+        self.queue_labels: dict[str, str] = {}  # ref -> the label you gave in the label view
         self.improvement_status = "branch_ready"
 
 
@@ -375,6 +394,36 @@ def install(page: Page, role: str, sse_status: int = 200) -> Rec:
             return _json(route, [dict(IMPROVEMENT, status=r.improvement_status)])
         if path == f"/api/improvements/{IMPROVEMENT_ID}":
             return _json(route, dict(IMPROVEMENT_DETAIL, status=r.improvement_status))
+        if path == "/api/labels/queue":
+            if role == "viewer":
+                return _json(route, {"detail": "needs the approver role"}, 403)
+            waiting = [j for j in QUEUE_JOBS if j["ref"] not in r.queue_labels]
+            n = len(r.queue_labels)
+            return _json(route, {
+                "scorer": "merge-readiness", "labels": QUEUE_LABELS, "jobs": waiting,
+                "total": len(waiting), "awaiting_judge": 2,
+                "progress": {"n": n, "human_pass": n, "human_fail": 0, "kappa": None,
+                             "calibrated": False, "judge_model": "qwen-27b@groq",
+                             "tag": f"uncalibrated ({n} of 30 labels)", "needed": 30,
+                             "per_class": 5},
+            })  # fmt: skip
+        if (
+            req.method == "PUT"
+            and path.endswith("/scores/merge-readiness/label")
+            and path.split("/")[3] in {j["ref"] for j in QUEUE_JOBS}
+        ):
+            ref = path.split("/")[3]
+            given: dict[str, Any] = req.post_data_json or {}
+            r.posts.append((path, given))
+            r.queue_labels[ref] = given["label"]
+            r.labelled.add("merge-readiness")  # the job drawer's judge list shows it from now on
+            tag = f"uncalibrated ({len(r.queue_labels)} of 30 labels)"
+            judge = {
+                "scorer": "merge-readiness", "judge_model": "qwen-27b@groq", "label": "B",
+                "reason": "needs a test for empty input", "passed": True, "hidden": False,
+                "calibration": tag,
+            }  # fmt: skip
+            return _json(route, {"stored": True, "label": given["label"], "judges": [judge]})
         if path == "/api/jobs/todo:003/scores/merge-readiness/label" and req.method == "PUT":
             r.posts.append((path, req.post_data_json))
             r.labelled.add("merge-readiness")
@@ -1013,3 +1062,76 @@ def test_run_button_admin_only(page: Page, page_viewer: Page) -> None:
     goto(page_viewer, "#/improvements")
     expect(page_viewer.get_by_text("builder").first).to_be_visible()
     expect(page_viewer.get_by_role("button", name="Run improver now")).to_have_count(0)
+
+
+@pytest.mark.ui
+def test_label_page_shows_the_job_and_hides_the_judge(page: Page) -> None:
+    goto(page, "#/label")
+    expect(page.get_by_role("heading", name="Label jobs")).to_be_visible()
+    expect(page.get_by_text("0 of 30 labels")).to_be_visible()
+    expect(page.get_by_text("todo:003")).to_be_visible()
+    expect(page.get_by_text("Add a slugify function")).to_be_visible()
+    expect(page.locator("pre.diff")).to_contain_text("+def slugify(t):")
+    assert page.locator("pre.diff img").count() == 0  # the payload in the diff stays text
+    expect(page.locator("pre.diff")).to_contain_text("<img src=x onerror=alert(1)>")
+    expect(page.get_by_text("more lines not shown")).to_be_visible()  # a long diff is cut
+    expect(page.get_by_role("button", name=re.compile(r"^A\b"))).to_be_visible()
+    expect(page.get_by_text("Wrong or out of scope.")).to_be_visible()
+    expect(page.get_by_text("The judge said")).to_have_count(0)  # hidden until you label
+    expect(page.get_by_text("2 finished jobs have no judge verdict yet")).to_be_visible()
+
+
+@pytest.mark.ui
+def test_label_page_saves_then_shows_the_judge_and_moves_on(page: Page) -> None:
+    goto(page, "#/label")
+    page.get_by_role("button", name=re.compile(r"^A\b")).click()
+    expect(page.get_by_text("todo:003 labelled A. The judge said B")).to_be_visible()
+    expect(page.get_by_text("needs a test for empty input")).to_be_visible()
+    expect(page.get_by_text("1 of 30 labels")).to_be_visible()
+    expect(page.get_by_text("shop:001")).to_be_visible()  # the next job
+    assert ("/api/jobs/todo:003/scores/merge-readiness/label", {"label": "A"}) in rec(page).posts
+    page.get_by_role("button", name=re.compile(r"^C\b")).click()
+    expect(page.get_by_text("Nothing is waiting for your label")).to_be_visible()
+    assert rec(page).queue_labels == {"todo:003": "A", "shop:001": "C"}
+
+
+@pytest.mark.ui
+def test_label_page_keys_and_skip(page: Page) -> None:
+    goto(page, "#/label")
+    page.get_by_role("button", name="Skip").click()
+    expect(page.get_by_text("shop:001")).to_be_visible()
+    assert rec(page).queue_labels == {}  # skipping stores nothing
+    page.keyboard.press("2")  # the second label, B
+    expect(page.get_by_text("shop:001 labelled B")).to_be_visible()
+    assert rec(page).queue_labels == {"shop:001": "B"}
+
+
+@pytest.mark.ui
+def test_label_page_missing_files_do_not_break_it(page: Page) -> None:
+    goto(page, "#/label")
+    page.get_by_role("button", name="Skip").click()  # shop:001 has a feature.md and nothing else
+    expect(page.get_by_text("Add a clamp function")).to_be_visible()
+    expect(page.get_by_text("no diff.patch for this job")).to_be_visible()
+
+
+@pytest.mark.ui
+def test_label_page_for_a_viewer_says_why(page_viewer: Page) -> None:
+    goto(page_viewer, "#/label")
+    expect(page_viewer.get_by_text("needs the approver role")).to_be_visible()
+    assert page_viewer.get_by_role("button", name=re.compile(r"^A\b")).count() == 0
+
+
+@pytest.mark.ui
+def test_label_progress_bar_follows_the_count_under_the_csp(page: Page) -> None:
+    """The page's CSP (default-src 'self') drops an inline style attribute, so a bar sized that
+    way was full at 0 of 30. The width is set through the style object instead."""
+    goto(page, "#/label")
+    fill = page.locator(".meter .fill")
+    meter = page.locator(".meter")
+    expect(fill).to_have_count(1)
+    assert fill.evaluate("e => e.getBoundingClientRect().width") == 0  # 0 of 30
+    page.get_by_role("button", name=re.compile(r"^A\b")).click()
+    expect(page.get_by_text("1 of 30 labels")).to_be_visible()
+    width = fill.evaluate("e => e.getBoundingClientRect().width")
+    whole = meter.evaluate("e => e.getBoundingClientRect().width")
+    assert 0 < width < whole / 2  # 1 of 30 is 3 percent, not a full bar

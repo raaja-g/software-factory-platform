@@ -45,6 +45,7 @@ function h(tag, props, ...kids) {
     else if (k === 'on') for (const [ev, fn] of Object.entries(v)) el.addEventListener(ev, fn);
     else if (k === 'data') for (const [dk, dv] of Object.entries(v)) el.dataset[dk] = dv;
     else if (k === 'value') el.value = v;
+    else if (k === 'style') el.style.cssText = v; // the CSP drops an inline style attribute, not the style object
     else if (v === true) el.setAttribute(k, '');
     else el.setAttribute(k, String(v));
   }
@@ -843,6 +844,100 @@ async function showMetrics() {
           : h('tr', {}, h('td', { colspan: '5', class: 'muted', text: 'No judge scores yet' }))))))));
 }
 
+/* ── labelling: your verdicts on finished jobs, so a judge can be calibrated ── */
+const LABEL_DIFF_LINES = 300;
+const LABEL_FILES = ['feature.md', 'diff.patch', 'verify.md', 'decision.md', 'spec.md'];
+async function labelFile(ref, name) {
+  const res = await api(artifactUrl({ ref }, name));
+  return res.ok ? res.text() : null;
+}
+function labelProgress(p) {
+  const pct = Math.min(100, Math.round((p.n / p.needed) * 100));
+  const rule = `${p.human_pass} passing and ${p.human_fail} failing so far; at least ${p.per_class} of each are needed`;
+  return h('div', { class: 'label-progress' },
+    h('strong', { text: `${p.n} of ${p.needed} labels` }), ' ',
+    h('span', { class: 'muted', text: p.calibrated ? `calibrated, kappa ${p.kappa === null ? 'n/a' : p.kappa.toFixed(2)}` : 'not counted yet' }),
+    h('div', { class: 'meter', role: 'img', 'aria-label': `${pct}% of the labels needed` }, h('span', { class: 'fill', style: `width:${pct}%` })),
+    h('p', { class: 'muted', text: rule }));
+}
+async function labelCard(job) {
+  const files = {};
+  await Promise.all(LABEL_FILES.map(async (n) => { files[n] = await labelFile(job.ref, n); }));
+  const text = (n, empty) => (files[n] === null ? h('p', { class: 'muted', text: empty }) : h('pre', { class: 'log', text: files[n] }));
+  let diff;
+  if (files['diff.patch'] === null) diff = h('p', { class: 'muted', text: 'no diff.patch for this job' });
+  else {
+    const lines = files['diff.patch'].split('\n');
+    diff = h('div', {}, h('pre', { class: 'diff', text: lines.slice(0, LABEL_DIFF_LINES).join('\n') }),
+      lines.length > LABEL_DIFF_LINES && h('p', { class: 'muted' }, `${lines.length - LABEL_DIFF_LINES} more lines not shown. `,
+        h('a', { href: `#/job/${encodeURIComponent(job.ref)}`, text: 'Open the job for all of it' })));
+  }
+  return h('div', { class: 'label-job' },
+    h('h3', { text: `${job.ref} · ${job.title}` }),
+    h('p', { class: 'muted', text: `${job.app}, ${job.stage}` }),
+    h('h4', { text: 'What was asked' }), text('feature.md', 'no feature.md for this job'),
+    h('h4', { text: 'What changed' }), diff,
+    h('h4', { text: 'Tests' }), text('verify.md', 'no verify.md for this job'),
+    h('h4', { text: 'Reviewers' }), text('decision.md', 'no decision.md for this job'),
+    files['spec.md'] !== null && h('details', {}, h('summary', { text: 'Spec' }), h('pre', { class: 'log', text: files['spec.md'] })));
+}
+async function showLabel() {
+  const token = state.token;
+  const mine = { skipped: new Set(), flash: null, busy: false, queue: null, job: null };
+  const load = async () => { mine.queue = await apiJson('/api/labels/queue'); await draw(); };
+  const save = async (value) => {
+    const q = mine.queue, job = mine.job;
+    if (!job || mine.busy || !can('approver')) return;
+    mine.busy = true;
+    try {
+      const out = await apiJson(jobPath(job, `scores/${encodeURIComponent(q.scorer)}/label`), { method: 'PUT', json: { label: value } });
+      const j = (out.judges || [])[0];
+      const mineLabel = q.labels.find((l) => l.value === value);
+      mine.flash = { text: `${job.ref} labelled ${value}.`, judge: j ? { said: j.label, reason: j.reason, agrees: j.passed === (mineLabel ? mineLabel.passes : null) } : null };
+      await load();
+    } catch (err) { mine.flash = { error: err.message }; await draw(); } finally { mine.busy = false; }
+  };
+  const skip = async () => { if (mine.job) { mine.skipped.add(mine.job.ref); await draw(); } };
+  const onKey = (e) => {
+    if (state.token !== token) { document.removeEventListener('keydown', onKey); return; }
+    if (e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '')) return;
+    const l = mine.queue && /^[1-9]$/.test(e.key) ? mine.queue.labels[Number(e.key) - 1] : null;
+    if (l) { e.preventDefault(); save(l.value); }
+  };
+  document.addEventListener('keydown', onKey);
+  async function draw() {
+    if (state.token !== token) return;
+    const q = mine.queue;
+    const open = q.jobs.filter((j) => !mine.skipped.has(j.ref));
+    mine.job = open[0] || null;
+    const kids = [labelProgress(q.progress)];
+    if (mine.flash) {
+      const f = mine.flash;
+      kids.push(f.error ? h('p', { class: 'status-line err', role: 'status', text: f.error })
+        : h('p', { class: 'status-line', role: 'status' }, f.judge ? `${f.text} The judge said ${f.judge.said}` : f.text,
+          f.judge && h('span', { class: 'muted' }, ` (${f.judge.agrees ? 'you agree' : 'you disagree'}) `), f.judge && f.judge.reason && h('span', { text: f.judge.reason })));
+    }
+    if (q.awaiting_judge > 0) {
+      kids.push(h('p', { class: 'muted', text: `${q.awaiting_judge} finished ${q.awaiting_judge === 1 ? 'job has' : 'jobs have'} no judge verdict yet, so ${q.awaiting_judge === 1 ? 'it is' : 'they are'} not listed. Run: factory score REF --force --scorer ${q.scorer}` }));
+    }
+    if (!mine.job) {
+      kids.push(h('p', { text: q.jobs.length ? 'Only skipped jobs are left.' : 'Nothing is waiting for your label.' }),
+        mine.skipped.size > 0 && h('button', { class: 'btn', type: 'button', text: 'Show skipped jobs', on: { click: () => { mine.skipped.clear(); draw(); } } }));
+    } else {
+      const card = await labelCard(mine.job);
+      if (state.token !== token) return;
+      kids.push(h('p', { class: 'muted', text: `${open.length} of ${q.total} waiting. Press 1 to ${q.labels.length} to label, or choose below.` }),
+        h('div', { class: 'label-buttons', role: 'group', 'aria-label': `Your label for ${q.scorer}` },
+          q.labels.map((l, i) => h('button', { class: `btn label-btn ${l.passes ? 'pass' : 'fail'}`, type: 'button', disabled: !can('approver'), 'data-key': String(i + 1),
+            on: { click: () => save(l.value) } }, h('strong', { text: l.value }), ' ', l.description || '', h('span', { class: 'muted', text: l.passes ? ' counts as pass' : ' counts as fail' }))),
+          h('button', { class: 'btn', type: 'button', text: 'Skip', on: { click: skip } })),
+        card);
+    }
+    $('#main').replaceChildren(page('Label jobs', ...kids));
+  }
+  await load();
+}
+
 /* ── benchmarks ─────────────────────────────────── */
 const SVGNS = 'http://www.w3.org/2000/svg';
 function svgEl(tag, attrs, ...kids) {
@@ -1122,7 +1217,7 @@ async function showImprovements() {
 }
 
 /* ── routing ────────────────────────────────────── */
-const VIEWS = { backlogs: showBacklogs, backlog: showBacklog, new: showNew, run: showRun, apps: showApps, models: showModels, profiles: showProfiles, definition: showDefinition, metrics: showMetrics, benchmarks: showBenchmarks, improvements: showImprovements };
+const VIEWS = { backlogs: showBacklogs, backlog: showBacklog, new: showNew, run: showRun, apps: showApps, models: showModels, profiles: showProfiles, definition: showDefinition, metrics: showMetrics, label: showLabel, benchmarks: showBenchmarks, improvements: showImprovements };
 async function route() {
   let hash = '';
   try { hash = decodeURIComponent(location.hash.slice(1)); } catch { /* malformed hash */ }
