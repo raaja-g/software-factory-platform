@@ -133,17 +133,26 @@ _VALUE_STRIP = " \t`'\"*_"
 
 
 def parse_judgement(text: str, scorer: ScorerDef) -> Judgement:
+    # One `LABEL: <value>` line anywhere: models sometimes open with a sentence, and the answer is
+    # still clear. Two or more is ambiguous (a judge quoting a line from the diff, then its own),
+    # so that is refused rather than guessed at.
     lines = [ln for ln in text.splitlines() if ln.strip()]
-    m = _LABEL_RE.match(lines[0]) if lines else None
-    if m is None or not m.group(1).strip(_VALUE_STRIP):
-        raise ContractError("the first non-empty line must be 'LABEL: <value>'")
-    given = m.group(1).strip(_VALUE_STRIP)
+    hits: list[tuple[int, str]] = []
+    for i, ln in enumerate(lines):
+        m = _LABEL_RE.match(ln)
+        if m is not None and m.group(1).strip(_VALUE_STRIP):
+            hits.append((i, m.group(1).strip(_VALUE_STRIP)))
+    if not hits:
+        raise ContractError("no 'LABEL: <value>' line in the answer")
+    if len(hits) > 1:
+        raise ContractError("more than one 'LABEL: <value>' line in the answer")
+    at, given = hits[0]
     by_lower = {lb.value.lower(): lb for lb in scorer.labels}
     found = by_lower.get(given.lower())
     if found is None:
         raise ContractError(f"unknown label '{given}'")
     reason = ""
-    for ln in lines[1:]:
+    for ln in lines[at + 1 :]:
         rm = _REASON_RE.match(ln)
         if rm is not None:
             reason = rm.group(1).strip()

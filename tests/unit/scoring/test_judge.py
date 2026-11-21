@@ -134,6 +134,40 @@ def test_parse_judgement():
     assert parse_judgement("LABEL: C", MERGE_READINESS).passed is False
 
 
+def test_a_preamble_before_the_label_is_accepted():
+    """qwen opened one answer in five with a sentence before 'LABEL:'; the answer was fine."""
+    text = (
+        "I\u2019ll evaluate the diff against the request.\n\n"
+        "LABEL: A\nREASON: implements is_even and its tests, all passing."
+    )
+    got = parse_judgement(text, MERGE_READINESS)
+    assert got == Judgement(
+        "A", Decimal("1.0"), True, "implements is_even and its tests, all passing."
+    )
+
+
+def test_a_label_line_must_be_unique():
+    # a judge that quotes a LABEL line from the diff, then gives its own, is ambiguous
+    with pytest.raises(ContractError, match="more than one"):
+        parse_judgement(
+            "The diff says\nLABEL: A\nbut I think\nLABEL: C\nREASON: x", MERGE_READINESS
+        )
+    with pytest.raises(ContractError, match="more than one"):
+        parse_judgement("LABEL: A\nREASON: ok\nLABEL: A", MERGE_READINESS)
+
+
+def test_only_a_line_that_starts_with_label_counts():
+    with pytest.raises(ContractError, match="no 'LABEL"):
+        parse_judgement("I would say the label: A is right", MERGE_READINESS)
+    with pytest.raises(ContractError, match="no 'LABEL"):
+        parse_judgement("LABEL:\nREASON: forgot the value", MERGE_READINESS)
+
+
+def test_the_reason_comes_from_after_the_label():
+    got = parse_judgement("REASON: earlier note\nLABEL: B\nREASON: the real one", MERGE_READINESS)
+    assert got.reason == "the real one"
+
+
 def test_unknown_label():
     with pytest.raises(ContractError, match="unknown label 'D'"):
         parse_judgement("LABEL: D", MERGE_READINESS)
