@@ -103,8 +103,8 @@ def test_no_shared_sandbox_network():
 
 def test_ports_loopback_only():
     assert sorted(p for s in svcs() for p in s.get("ports", [])) == [
-        "127.0.0.1:7000:7000",
         "127.0.0.1:7080:7080",
+        "127.0.0.1:7300:7300",
         "127.0.0.1:7400:4000",
     ]
 
@@ -248,7 +248,7 @@ def test_readme_quickstart():
     needed = [
         "make up",
         "make down",
-        "http://127.0.0.1:7000",  # the dashboard
+        "http://127.0.0.1:7300",  # the dashboard
         "gcloud auth application-default login",
         "FACTORY_LOGIN_PASSWORD",
         "factory dashboard",
@@ -483,7 +483,7 @@ def test_the_dashboard_is_its_own_service_and_the_api_no_longer_serves_it():
     api, ui = svc("api"), svc("ui")
     assert api["environment"]["FACTORY_SERVE_WEB"] == "false"
     assert "FACTORY_PUBLIC_URL" in api["environment"]  # so the API accepts the UI's origin
-    assert ui["ports"] == ["127.0.0.1:7000:7000"] and ui["networks"] == ["core-net"]
+    assert ui["ports"] == ["127.0.0.1:7300:7300"] and ui["networks"] == ["core-net"]
     assert ui["depends_on"]["api"]["condition"] == "service_healthy"
 
 

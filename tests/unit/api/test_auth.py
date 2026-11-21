@@ -162,6 +162,38 @@ def test_origin_allowed(origin, ok):
     assert origin_allowed(origin, srv(FACTORY_PUBLIC_URL=PUBLIC)) is ok
 
 
+@pytest.mark.parametrize(
+    "public, origin, ok",
+    [
+        # the dashboard on this machine is the same site by either loopback name
+        ("http://127.0.0.1:7300", "http://127.0.0.1:7300", True),
+        ("http://127.0.0.1:7300", "http://localhost:7300", True),
+        ("http://localhost:7300", "http://127.0.0.1:7300", True),
+        ("http://LocalHost:7300", "http://localhost:7300", True),
+        # but only with the same scheme and port, and only the two names
+        ("http://127.0.0.1:7300", "http://localhost:7301", False),
+        ("http://127.0.0.1:7300", "https://localhost:7300", False),
+        ("http://127.0.0.1:7300", "http://localhost", False),
+        ("http://127.0.0.1:7300", "http://127.0.0.2:7300", False),
+        ("http://127.0.0.1:7300", "http://[::1]:7300", False),
+        ("http://127.0.0.1:7300", "http://localhost.evil.example:7300", False),
+        # a real hostname is never aliased to the loopback names
+        ("https://factory.example.com", "http://localhost:443", False),
+        ("https://factory.example.com", "https://localhost", False),
+    ],
+)
+def test_the_dashboard_origin_accepts_either_loopback_name(public, origin, ok):
+    assert origin_allowed(origin, srv(FACTORY_PUBLIC_URL=public)) is ok
+
+
+def test_the_loopback_alias_does_not_extend_to_the_api_url():
+    # only the dashboard's own address gets the alias; the API's address stays exact
+    assert (
+        origin_allowed("http://localhost:7080", srv(FACTORY_PUBLIC_URL="http://127.0.0.1:7300"))
+        is False
+    )
+
+
 def test_public_origin_needs_public_url():
     assert origin_allowed(PUBLIC, srv()) is False
 

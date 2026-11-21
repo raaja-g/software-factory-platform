@@ -9,7 +9,7 @@ up:
 	@[ -f secrets/registry-credentials.json ] || (umask 077; echo '{}' > secrets/registry-credentials.json)
 	@[ -f .env ] || (umask 077; touch .env)
 	docker compose up -d --build --wait
-	@echo "Open http://127.0.0.1:7000 and sign in (password: FACTORY_LOGIN_PASSWORD in .env, else secrets/api_token). Or: make dashboard"
+	@echo "Open http://127.0.0.1:7300 and sign in (password: FACTORY_LOGIN_PASSWORD in .env, else secrets/api_token). Or: make dashboard"
 
 down:
 	docker compose down

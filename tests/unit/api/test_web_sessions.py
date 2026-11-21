@@ -11,7 +11,7 @@ from tests.unit.api.test_auth import bearer, make_client
 
 import swfactory.api.app as app_mod
 
-UI = "http://127.0.0.1:7000"
+UI = "http://127.0.0.1:7300"
 PW = "correct horse battery"
 USER = "Raja"
 START = datetime(2026, 3, 1, 12, 0, tzinfo=UTC)

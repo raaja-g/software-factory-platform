@@ -8,7 +8,7 @@ x-platform-env: &platform-env
   FACTORY_IN_CONTAINER: "1"
   FACTORY_HOST_HOME: ${HOME}
   FACTORY_NOTIFY_WEBHOOK_URL: ${FACTORY_NOTIFY_WEBHOOK_URL:-}
-  FACTORY_PUBLIC_URL: ${FACTORY_PUBLIC_URL:-http://127.0.0.1:7000}  # the dashboard's own address (ui)
+  FACTORY_PUBLIC_URL: ${FACTORY_PUBLIC_URL:-http://127.0.0.1:7300}  # the dashboard's own address (ui)
   FACTORY_DISK_HIGH_WATER_PCT: ${FACTORY_DISK_HIGH_WATER_PCT:-85}  # the worker starts no new job above this
 
 services:
@@ -94,20 +94,20 @@ services:
     networks: [core-net]
 
   # The dashboard on its own (static files, and /api and /login forwarded to the api service).
-  # Open http://127.0.0.1:7000. The api stays published on 7080 for the CLI and other clients.
+  # Open http://127.0.0.1:7300. The api stays published on 7080 for the CLI and other clients.
   ui:
     image: swfactory-ui:dev
     build:
       context: .
       dockerfile: docker/ui.Dockerfile
     ports:
-      - "127.0.0.1:7000:7000"
+      - "127.0.0.1:7300:7300"
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7000/ui-health"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7300/ui-health"]
       interval: 10s
       timeout: 3s
       retries: 6

@@ -47,10 +47,10 @@ def ui():
         # the stand-in for the API must be called `api` on the network, as in the compose stack
         stub = sh("docker", "run", "-d", "--rm", "--network", net, "--network-alias", "api",
                   "python:3.13-slim", "python", "-c", STUB).stdout.strip()  # fmt: skip
-        run_ui = ["docker", "run", "-d", "--rm", "--network", net, "-p", "127.0.0.1::7000"]
+        run_ui = ["docker", "run", "-d", "--rm", "--network", net, "-p", "127.0.0.1::7300"]
         run_ui += ["--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL", IMAGE]
         ui_c = sh(*run_ui).stdout.strip()
-        port = sh("docker", "port", ui_c, "7000/tcp").stdout.split(":")[-1].strip()
+        port = sh("docker", "port", ui_c, "7300/tcp").stdout.split(":")[-1].strip()
         base = f"http://127.0.0.1:{port}"
         for _ in range(40):
             try:

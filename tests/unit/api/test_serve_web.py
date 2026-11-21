@@ -8,7 +8,7 @@ FACTORY_PUBLIC_URL."""
 from tests.unit.api.api_support import PERSONAL_TOKEN, settings
 from tests.unit.api.test_auth import bearer, make_client
 
-UI = "http://127.0.0.1:7000"
+UI = "http://127.0.0.1:7300"
 
 
 def test_the_api_serves_the_dashboard_by_default():

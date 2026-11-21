@@ -138,6 +138,9 @@ class LoginCodes:
 # ---- origin ----
 
 
+_LOOPBACK_NAMES = ("127.0.0.1", "localhost")
+
+
 def _origin_key(value: str) -> tuple[str, str, int] | None:
     try:
         parts = urlsplit(value.strip())
@@ -159,7 +162,12 @@ def origin_allowed(origin: str | None, settings: Settings) -> bool:
         return False
     allowed = {_origin_key(settings.api_url)}
     if settings.public_url:
-        allowed.add(_origin_key(settings.public_url))
+        public = _origin_key(settings.public_url)
+        allowed.add(public)
+        # On this machine `localhost` and `127.0.0.1` are one site, and people type either. Only
+        # the dashboard's own address gets this, with the same scheme and port.
+        if public is not None and public[1] in _LOOPBACK_NAMES:
+            allowed.update((public[0], name, public[2]) for name in _LOOPBACK_NAMES)
     return key in allowed
 
 

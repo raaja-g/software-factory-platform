@@ -162,7 +162,7 @@ async def test_the_api_uses_the_database_store_end_to_end(db):
 
     from swfactory.api.app import create_app
 
-    ui = "http://127.0.0.1:7000"
+    ui = "http://127.0.0.1:7300"
 
     def app_client(**kw):
         kw.setdefault("FACTORY_LOGIN_PASSWORD", "correct horse battery")
