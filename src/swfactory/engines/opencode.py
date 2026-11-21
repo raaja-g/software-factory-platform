@@ -17,7 +17,7 @@ from swfactory.engines.base import (
 )
 from swfactory.models.profiles import model_family
 from swfactory.sandbox.base import Sandbox
-from swfactory.sandbox.paths import HOME, REPO
+from swfactory.sandbox.paths import HOME, OUT, REPO
 
 OPENCODE_CACHE = "/opt/factory-engines/opencode-cache"
 OPENCODE_HOME_CACHE = "/home/factory/.cache/opencode"
@@ -47,7 +47,16 @@ class OpenCodeRun:
 
 def opencode_permission(policy: ToolPolicy) -> dict[str, Any]:
     if policy is ToolPolicy.WRITE:
-        return {"edit": "allow", "bash": "allow", "webfetch": "deny"}
+        # A write role puts its output file in OUT, which is outside the repo it works in, and
+        # OpenCode auto-rejects a tool call outside the project ("permission requested:
+        # external_directory ... auto-rejecting"): the builder committed its code and then could not
+        # write build.md, so every build failed the output contract. Allow that one directory only.
+        return {
+            "edit": "allow",
+            "bash": "allow",
+            "webfetch": "deny",
+            "external_directory": {f"{OUT}/*": "allow"},
+        }
     if policy is ToolPolicy.READ_RUN:
         return {"edit": "deny", "webfetch": "deny", "bash": "allow"}
     if policy is ToolPolicy.READ_ONLY:

@@ -5,8 +5,11 @@ The checkpointer keeps a pool of connections. After the server restarts (an upgr
 checkout each one hands out a failure, three failures poison a job, and the worker needed a manual
 restart. The pool now validates a connection when it is handed out."""
 
+from typing import Any
+
 import psycopg
 import pytest
+from langchain_core.runnables import RunnableConfig
 
 from swfactory.db.engine import open_checkpointer
 
@@ -18,13 +21,14 @@ def _plain(url: str) -> str:
 
 
 async def test_checkpointer_survives_its_connections_being_killed(pg_url):
-    config = {"configurable": {"thread_id": "reconnect-test"}}
+    config: RunnableConfig = {"configurable": {"thread_id": "reconnect-test"}}
     async with open_checkpointer(pg_url, max_size=4) as saver:
-        pool = saver.conn  # the AsyncConnectionPool
+        pool: Any = saver.conn  # the AsyncConnectionPool
         pids: set[int] = set()
         for _ in range(4):  # warm the pool: four idle connections to kill
-            async with pool.connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            async with pool.connection() as conn:
                 row = await (await conn.execute("select pg_backend_pid() as pid")).fetchone()
+                assert row is not None
                 pids.add(row["pid"])
         assert await saver.aget_tuple(config) is None  # works before the "restart"
 

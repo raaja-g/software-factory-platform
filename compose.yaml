@@ -8,6 +8,7 @@ x-platform-env: &platform-env
   FACTORY_IN_CONTAINER: "1"
   FACTORY_HOST_HOME: ${HOME}
   FACTORY_NOTIFY_WEBHOOK_URL: ${FACTORY_NOTIFY_WEBHOOK_URL:-}
+  FACTORY_DISK_HIGH_WATER_PCT: ${FACTORY_DISK_HIGH_WATER_PCT:-85}  # the worker starts no new job above this
 
 services:
   postgres:

@@ -113,6 +113,7 @@ def test_read_run_permission():
 def test_write_and_none_permission():
     assert opencode_permission(ToolPolicy.WRITE) == {
         "edit": "allow", "bash": "allow", "webfetch": "deny",
+        "external_directory": {"/work/.factory/out/*": "allow"},
     }  # fmt: skip
     assert opencode_permission(ToolPolicy.NONE) == {
         "edit": "deny", "webfetch": "deny", "bash": "deny",
@@ -159,3 +160,14 @@ async def test_nonzero_exit_failed_with_error_class(stub_box_opencode_error, tas
     assert (r.status, r.meta["error_class"]) == (RunStatus.FAILED, "gateway")
     assert r.error is not None and "ECONNREFUSED" in r.error
     assert model_error_class(r.error) is None
+
+
+def test_only_write_roles_may_touch_the_output_directory():
+    # a write role's output file lives in /work/.factory/out, outside the repo; OpenCode
+    # auto-rejects a write outside the project unless that path is allowed, so a builder that did
+    # its work could not write build.md. Nothing broader than that one directory is allowed, and
+    # roles that reply in their final message get no external access at all.
+    write = opencode_permission(ToolPolicy.WRITE)["external_directory"]
+    assert write == {"/work/.factory/out/*": "allow"}
+    for policy in (ToolPolicy.READ_ONLY, ToolPolicy.READ_RUN, ToolPolicy.NONE):
+        assert "external_directory" not in opencode_permission(policy)

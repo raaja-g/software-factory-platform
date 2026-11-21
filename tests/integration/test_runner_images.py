@@ -33,3 +33,22 @@ def test_runner_toolchain():
         "make --version",
     ):
         assert exit_code(tool) == 0
+
+
+@pytest.mark.docker
+def test_runner_user_can_seed_the_opencode_cache():
+    """OpenCode's pre-installed provider packages are copied into the home cache at run time.
+    `npm rebuild opencode-ai` runs as root with HOME=/home/factory and used to leave `.cache` owned
+    by root, so every run logged "opencode cache copy failed: Permission denied" and OpenCode had
+    to fetch its provider package itself instead of using the offline copy."""
+    assert run("stat -c %u /home/factory/.cache 2>/dev/null || echo missing") in (
+        "10001",
+        "missing",
+    )
+    seeded = _run(
+        "mkdir -p /home/factory/.cache/opencode"
+        ' && cp -an "$OPENCODE_CACHE"/. /home/factory/.cache/opencode/'
+        " && ls /home/factory/.cache/opencode/node_modules | head -1"
+    )
+    assert seeded.returncode == 0, seeded.stderr
+    assert seeded.stdout.strip() != ""

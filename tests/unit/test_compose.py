@@ -451,3 +451,12 @@ def test_docker_proxy_allows_what_the_sandbox_needs_and_nothing_more():
         "PLUGINS",
     }
     assert not (off & on)
+
+
+def test_disk_high_water_reaches_the_platform_services():
+    """The setting is documented in .env.example, so it has to reach the containers that read it;
+    the default stays 85."""
+    for name in ("orchestrator", "api"):
+        assert svc(name)["environment"]["FACTORY_DISK_HIGH_WATER_PCT"] == (
+            "${FACTORY_DISK_HIGH_WATER_PCT:-85}"
+        )

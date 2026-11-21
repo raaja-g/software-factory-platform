@@ -37,7 +37,7 @@ RUN npm ci --omit=dev --ignore-scripts \
 # M6.4 copies it into the writable home).
 COPY docker/engines/opencode-providers/package.json docker/engines/opencode-providers/package-lock.json ${OPENCODE_CACHE}/
 RUN npm ci --omit=dev --ignore-scripts --prefix ${OPENCODE_CACHE} \
- && chown -R 10001:10001 ${OPENCODE_CACHE}
+ && chown -R 10001:10001 ${OPENCODE_CACHE} /home/factory  # `npm rebuild` above ran as root with HOME=/home/factory
 ENV DISABLE_AUTOUPDATER=1 \
     DISABLE_UPDATES=1 \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
