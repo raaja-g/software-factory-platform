@@ -127,6 +127,14 @@ M12 is done (the improver). All planned milestones are built; what remains is th
 - [x] **2026-11-19** Fixes made while checking: old CLI tests rewritten for the API-based CLI (who-asked now comes from the signed-in user); the gateway stack tests got a mock-model compose override (the gateway now reads a rendered config); a loader test no longer depends on a developer's `.env`; a unit test that was quietly querying the dev database now uses a stub; the notification webhook now reaches the API and worker in compose.
 - [ ] **Needs you:** the live acceptance replay (`make up` then `pytest -m e2e tests/e2e/test_v1_parity.py`) and real registry connections need Vertex credentials, models and your registries.
 
+## Live pass with real models (in progress)
+
+- [x] **2026-11-21** Wired real providers: Ollama, LM Studio (port 4321), Gemini, Groq (free) and OpenRouter (free) in a local definition, with an `api-free` profile. Keys live only in `.env`
+- [x] **2026-11-21** Real jobs now run the whole pipeline on real models (prepare, triage, spec, build). Found and fixed on the way: the gateway rejected every run key (Enterprise-only `tags`) and returned spend summaries; the Docker proxy denied container archive access; the tool-call probe recorded timeouts and LM Studio's `tool_choice` rejection as "no tool support" (so capable models were refused); the runner image left its home owned by root
+- [x] **2026-11-21** **Every build failed for one reason**: OpenCode auto-rejected the write of `build.md` because it is outside the repo (`permission requested: external_directory ... auto-rejecting`). Four models failed identically. Now only `/work/.factory/out/*` is allowed for write roles, proven with the real OpenCode binary
+- [x] **2026-11-21** Public training data imported (1,039 kind, 9,747 size, 264 touches_ui rows, licences recorded). `factory laya fit` fixed for real data (no idle transaction; capped rows); candidate heads are being fitted
+- [ ] **Next:** a job through build, review and merge on a real model; judges, a benchmark and a Laya evaluation; rotate the provider keys that were pasted in chat
+
 ## M12 Improver (done)
 
 - [x] **2026-11-21** M12.1 improver config, `improvements` columns, app-less improver jobs; M12.2 failure signals and the trigger; M12.3 proposal guardrails; M12.4 definition workspace (seed the sandbox, read back, commit and push a branch); M12.5 benchmark comparison and the PR body; M12.6 the improver graph; M12.7 periodic trigger, cycles, leases and CLI; M12.8 improvements API and dashboard page

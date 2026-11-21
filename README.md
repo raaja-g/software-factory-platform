@@ -4,7 +4,7 @@ A platform that turns a requirement into reviewed, merged code. For each feature
 
 **Status: under construction.** Milestones M1 to M8 and M10 to M12 are built: foundation, the job loop, roles and contracts, sandboxes with the verify gate and local git, the model gateway with cost control, the coding-agent adapters, the API, dashboard and CLI with a one-command local release, GitHub, scoring with a Metrics page, benchmarks, the Laya router, and now the improver. Still to come: the live pass with real models, the GitHub App and your registries (see below). See [progress.md](progress.md).
 
-## What works now (M1 to M8)
+## What works now (M1 to M12)
 
 - A Python package, `swfactory`, with a `factory` command line.
 - Settings from the environment, and logs that redact secrets.
@@ -105,6 +105,20 @@ uv run factory worker --exit-when-idle                                          
 An opt-in end-to-end test builds one small feature per engine on cheap models: `FACTORY_E2E_ENGINES=opencode,claude_code uv run pytest -m e2e` (skipped unless the gateway and credentials are present).
 
 **Not yet verified against real models.** The adapter tests use stub CLIs and fixtures written by hand from each CLI's documented output, because no credentials were available; the live checks (`factory models refresh`, the end-to-end tests) need your gcloud login and the models enabled in Model Garden, and may turn up differences in the real CLIs' output. Sandboxes still have open internet access: the `allowed_hosts` list is not enforced until the egress proxy and internal job networks (M13).
+
+## Connect real models
+
+The factory talks to models only through its gateway, and every provider is one block in `factory.yaml`. The shipped defaults already name the providers (`gemini`, `groq`, `openrouter`, `lm_studio`, `ollama`, `vertex`); you add the keys and the model ids.
+
+1. **Keys go in `.env`** (git-ignored), under the names the provider blocks expect: `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`. The definition only ever holds the variable *names*. After adding or changing a key, recreate the gateway so it picks it up: `docker compose up -d gateway` (a restart does not re-read `.env`).
+2. **Add a model alias** in your definition repo, for example `gpt-oss-120b@groq: { provider: groq, upstream_id: "openai/gpt-oss-120b", strength: mid, price_in_per_mtok: 0, price_out_per_mtok: 0 }`. A model with no price is treated as unavailable, so set 0 for free tiers. Free tiers also have small per-minute token limits, so use them for light roles and as fallbacks, not for the build step.
+3. **Local models:** LM Studio and Ollama run on your machine and are reached as `host.docker.internal`. Point the provider at your port (`base_url: http://host.docker.internal:4321/v1` for LM Studio on 4321).
+4. **Point a profile at the aliases** and an app at the profile, then `factory def sync` and `factory models refresh`. `factory models list` shows, per model, whether it is available and whether it passed a real tool-call test. A model that cannot call tools is refused for the coding roles; a timeout or rate limit while probing is shown as unknown, not as "no tools".
+5. **Keep reviewers and judges in a different model family** from the builder; the definition refuses a profile that does not.
+
+## Laya training data
+
+`factory laya import` takes rows you provide; `docs/laya-public-data.md` describes a builder that makes `kind`, `size` and `touches_ui` rows from public datasets (CC-BY, MIT and ODC-By only, with attribution and provenance recorded). `factory laya fit` trains on your own rows plus a sample of imported ones (at most 1,000 by default, `--max-rows`; about 0.6 s per row on a CPU) and creates a candidate head; it never switches anything on.
 
 ## Quickstart (local release)
 
