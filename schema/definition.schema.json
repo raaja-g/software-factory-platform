@@ -796,8 +796,23 @@
         },
         "failed_run_threshold": {
           "default": 25,
+          "maximum": 50,
+          "minimum": 1,
           "title": "Failed Run Threshold",
           "type": "integer"
+        },
+        "max_cycle_usd": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "default": "120",
+          "title": "Max Cycle Usd"
         },
         "max_failure_age_days": {
           "default": 7,
@@ -1792,6 +1807,7 @@
         "bench_suite": null,
         "enabled": false,
         "failed_run_threshold": 25,
+        "max_cycle_usd": "120",
         "max_failure_age_days": 7
       }
     },

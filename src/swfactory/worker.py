@@ -995,6 +995,78 @@ async def _bench_loop(deps: Deps, interval_s: float = BENCH_TICK_S) -> None:
         await asyncio.sleep(interval_s)
 
 
+def make_improver_ticker(
+    deps: Deps, cp: BaseCheckpointSaver, settings: Settings, worker_id: str
+) -> Any | None:
+    """The improver's ticker, or None without a definition source to propose changes against."""
+    source = settings.definition_source
+    if not source:
+        # improvements queued from the CLI or API wait for a ticker that does not exist here
+        log.warning("improver.no_ticker", reason="no FACTORY_DEFINITION_SOURCE")
+        return None
+    import uuid
+
+    from swfactory.definition.sync import definition_repo_slug
+    from swfactory.improve.graph import ImproveDeps, ImproverTicker, RunnerBenchPort
+    from swfactory.improve.workspace import DefinitionWorkspace
+
+    slug = definition_repo_slug(source)
+    auth: Any = None
+    gitops: Any = None
+    github: Any = None
+    if slug:
+        if deps.docker_client is None:
+            log.warning("improver.no_ticker", reason="no docker client for gitops")
+            return None
+        from swfactory.github.auth import make_auth
+        from swfactory.gitops.github import GitopsRunner
+        from swfactory.improve.graph import improver_client_factory
+
+        try:
+            auth = make_auth(settings)
+        except ValueError as exc:
+            log.warning("improver.no_github_auth", error=str(exc))
+            log.warning("improver.no_ticker", reason="no GitHub credentials")
+            return None
+        gitops = GitopsRunner(
+            deps.docker_client,
+            image=settings.gitops_image,
+            network=settings.gitops_network,
+            default_timeout_s=settings.gitops_timeout_s,
+        )
+        github = improver_client_factory(settings)
+    root = Path(settings.repos_dir) / "improve"
+    workspace_id = uuid.uuid4()
+
+    def workspace() -> DefinitionWorkspace:
+        return DefinitionWorkspace(source, root, job_id=workspace_id, auth=auth, gitops=gitops)
+
+    return ImproverTicker(
+        ImproveDeps(
+            core=deps,
+            bench=RunnerBenchPort(deps.sessions, deps.definitions),
+            workspace=workspace,
+            github=github,
+            clock=lambda: datetime.now(UTC),
+            checkpointer=cp,
+        ),
+        worker_id=worker_id,
+    )
+
+
+async def _improver_loop(ticker: Any, interval_s: float | None = None) -> None:
+    from swfactory.improve.graph import IMPROVER_TICK_S
+
+    while True:
+        try:
+            started = await ticker.tick(datetime.now(UTC))
+            if started:
+                log.info("improver.cycle_started", improvements=[str(i) for i in started])
+        except Exception as exc:
+            log.warning("improver.tick_failed", error=repr(exc))
+        await asyncio.sleep(interval_s or IMPROVER_TICK_S)
+
+
 RUN_REQUEST_TICK_S = 2.0
 
 
@@ -1171,6 +1243,12 @@ async def _loop(
     scorer_loop = asyncio.create_task(score_request_loop(deps, worker_id))
     scheduler = asyncio.create_task(_scheduler_loop(deps))
     bencher = asyncio.create_task(_bench_loop(deps))
+    improver_ticker = make_improver_ticker(deps, cp, settings, worker_id)
+    improver = (
+        asyncio.create_task(_improver_loop(improver_ticker))
+        if improver_ticker is not None
+        else None
+    )
     nightly = asyncio.create_task(_nightly_loop(deps, settings))
     github_poller = asyncio.create_task(_github_poll_loop(deps, settings))
     definition_sync = make_definition_sync(deps, settings)
@@ -1250,6 +1328,8 @@ async def _loop(
         scorer_loop.cancel()
         scheduler.cancel()
         bencher.cancel()
+        if improver is not None:
+            improver.cancel()
         nightly.cancel()
         github_poller.cancel()
         for t in sync_tasks:
@@ -1271,6 +1351,7 @@ async def _loop(
             bencher,
             nightly,
             github_poller,
+            *([improver] if improver else []),
             *sync_tasks,
             *([ticker] if ticker else []),
             *([catalog_ticker] if catalog_ticker else []),

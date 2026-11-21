@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import fnmatch
 import json
+import re
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -141,6 +142,29 @@ ESTIMATE_FIXTURE = {
     "per_config": {}, "basis": {},
 }  # fmt: skip
 
+IMPROVEMENT_ID = "11111111-2222-3333-4444-555555555555"
+IMPROVEMENT = {
+    "id": IMPROVEMENT_ID, "role_group": "builder", "trigger": "manual", "status": "branch_ready",
+    "branch": "improve/20261111-builder", "pr_url": None, "base_sha": "a" * 40,
+    "proposed_sha": "b" * 40, "result": "better", "hidden_before": 0.5, "hidden_after": 0.75,
+    "cost_usd": "48.600000", "created_at": "2026-11-11T00:00:00+00:00",
+}  # fmt: skip
+IMPROVEMENT_DETAIL = {
+    **IMPROVEMENT,
+    "evidence": {
+        "signals": [{"job_id": _jid(3), "job_ref": "todo:003", "role": "builder",
+                     "kind": "failed", "detail": "<b>tests never ran</b>", "at": "2026-11-10"}],
+        "changes": [{"path": "roles/builder.md", "status": "M"}],
+        "comparison": [{"config": "gemini", "hidden_before": 0.5, "hidden_after": 0.75,
+                        "quality_before": 0.5, "quality_after": 0.75,
+                        "mean_cost_before": "1.200000", "mean_cost_after": "1.100000"}],
+        "violations": [],
+        "costs": {"improver_usd": "3.000000", "bench_before_usd": "20.000000",
+                  "bench_after_usd": "25.600000", "total_usd": "48.600000"},
+    },
+    "error": None,
+}  # fmt: skip
+
 
 def _cfg(name: str, rate: float, iv: list[float], cost: str) -> dict[str, Any]:
     return {
@@ -262,6 +286,7 @@ class Rec:
         self.gets: list[str] = []
         self.sse: list[str] = []
         self.labelled: set[str] = set()
+        self.improvement_status = "branch_ready"
 
 
 _RECS: dict[int, Rec] = {}
@@ -307,6 +332,8 @@ def install(page: Page, role: str, sse_status: int = 200) -> Rec:
                 return _json(route, {"request_id": 7}, 202)
             if path == "/api/definition/sync":
                 return _json(route, {"active_sha": FIXTURE_SHA, "apps": {}})
+            if path == "/api/improvements/run":
+                return _json(route, {"ids": []})
             if path == "/api/bench/estimate":
                 r.posts.append((path, req.post_data_json))
                 return _json(route, ESTIMATE_FIXTURE)
@@ -344,6 +371,10 @@ def install(page: Page, role: str, sse_status: int = 200) -> Rec:
             return _json(route, BENCH_REPORT)
         if path == "/api/metrics":
             return _json(route, METRICS)
+        if path == "/api/improvements":
+            return _json(route, [dict(IMPROVEMENT, status=r.improvement_status)])
+        if path == f"/api/improvements/{IMPROVEMENT_ID}":
+            return _json(route, dict(IMPROVEMENT_DETAIL, status=r.improvement_status))
         if path == "/api/jobs/todo:003/scores/merge-readiness/label" and req.method == "PUT":
             r.posts.append((path, req.post_data_json))
             r.labelled.add("merge-readiness")
@@ -856,3 +887,40 @@ def test_benchmarks_page(page: Page) -> None:
     pick_suite(page, "v1-parity")
     expect(page.get_by_text("Estimated $57.48 (up to $120.48)")).to_be_visible()
     expect(start).to_be_enabled()
+
+
+def open_row(page: Page, text: str) -> None:
+    page.locator("table.improvements tbody tr", has_text=text).first.click()
+    expect(page.get_by_role("heading", name="Regressions addressed")).to_be_visible()
+
+
+@pytest.mark.ui
+def test_improvements_page(page: Page) -> None:
+    goto(page, "#/improvements")
+    assert headers(page, "table.improvements") == [
+        "Started", "Role group", "Trigger", "Status", "Pull request", "Hidden checks", "Cost",
+    ]  # fmt: skip
+    open_row(page, "builder")
+    expect(page.get_by_role("table", name="Before and after")).to_be_visible()
+    expect(page.get_by_role("button", name=re.compile("merge", re.I))).to_have_count(0)
+    expect(page.get_by_role("link", name="todo:003")).to_have_attribute("href", "#/job/todo%3A003")
+    expect(page.get_by_text("<b>tests never ran</b>")).to_be_visible()  # escaped, not rendered
+    expect(page.locator(".improvement-panel b")).to_have_count(0)
+
+
+@pytest.mark.ui
+def test_branch_ready_shows_review_hint(page: Page) -> None:
+    goto(page, "#/improvements")
+    open_row(page, "builder")
+    expect(
+        page.get_by_text("Merge it yourself after review: git diff main...improve/20261111-builder")
+    ).to_have_count(1)
+
+
+@pytest.mark.ui
+def test_run_button_admin_only(page: Page, page_viewer: Page) -> None:
+    goto(page, "#/improvements")
+    expect(page.get_by_role("button", name="Run improver now")).to_have_count(1)
+    goto(page_viewer, "#/improvements")
+    expect(page_viewer.get_by_text("builder").first).to_be_visible()
+    expect(page_viewer.get_by_role("button", name="Run improver now")).to_have_count(0)

@@ -395,9 +395,11 @@ class TriageConfig(StrictModel):
 
 class ImproverConfig(StrictModel):
     enabled: bool = False
-    failed_run_threshold: int = 25
+    failed_run_threshold: int = Field(default=25, ge=1, le=50)
     max_failure_age_days: int = 7
     bench_suite: str | None = None
+    # the most one improvement cycle's benchmark runs may cap in total (sum of budget_usd)
+    max_cycle_usd: Decimal = Field(default=Decimal("120"), gt=0)
 
 
 class FactoryConfig(StrictModel):
@@ -900,6 +902,21 @@ def check_references(defn: Definition, policy: DefinitionPolicy) -> tuple[Defini
 
     for i, rule in enumerate(f.triage.rules):
         check_profile(("factory", "triage", "rules", i, "profile"), rule.profile)
+
+    if f.improver.enabled:
+        suite = f.improver.bench_suite
+        if suite is None or suite not in defn.benchmarks:
+            ref(
+                ("factory", "improver", "bench_suite"),
+                f"improver.enabled needs improver.bench_suite naming a suite in benchmarks/ "
+                f"(got {suite!r})",
+            )
+        default_prof = defn.profiles.get(f.defaults.profile)
+        if default_prof is not None and Role.IMPROVER not in default_prof.roles:
+            ref(
+                ("profiles", f.defaults.profile, "roles"),
+                f"improver.enabled needs roles.improver in defaults.profile '{f.defaults.profile}'",
+            )
 
     for pname, prof in defn.profiles.items():
         for role, rp in prof.roles.items():

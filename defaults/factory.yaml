@@ -67,4 +67,9 @@ triage:
   mode: rules
   rules: []
 
-improver: { enabled: false, failed_run_threshold: 25, max_failure_age_days: 7 }
+improver:
+  enabled: false
+  failed_run_threshold: 25
+  max_failure_age_days: 7
+  bench_suite: v1-parity
+  max_cycle_usd: 120

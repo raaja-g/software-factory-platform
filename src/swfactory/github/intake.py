@@ -649,8 +649,13 @@ class GitHubPoller:
                 await client.comment_once(number, f"{body}\n\n<!-- {marker} -->", marker=marker)
 
 
-def make_client_factory(settings: Settings, *, broker: bool = False) -> ClientFor:
-    """One GitHubClient per repo, sharing auth and the serial mutation queue."""
+def make_client_factory(
+    settings: Settings, *, broker: bool = False, permissions: Mapping[str, str] | None = None
+) -> ClientFor:
+    """One GitHubClient per repo, sharing auth and the serial mutation queue.
+
+    `permissions` is the installation-token set every client asks for (the delivery set when
+    omitted); a caller that needs less, like the improver, names the narrower set."""
     from swfactory.github.auth import make_auth
     from swfactory.github.broker import BrokerAuth
     from swfactory.github.client import MutationQueue
@@ -664,7 +669,11 @@ def make_client_factory(settings: Settings, *, broker: bool = False) -> ClientFo
 
     def client_for(repo: str) -> GitHubClient:
         if repo not in cache:
-            cache[repo] = GitHubClient(auth, repo, queue)
+            cache[repo] = (
+                GitHubClient(auth, repo, queue)
+                if permissions is None
+                else GitHubClient(auth, repo, queue, permissions=permissions)
+            )
         return cache[repo]
 
     return client_for

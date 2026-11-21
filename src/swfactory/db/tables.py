@@ -41,6 +41,24 @@ USER_ROLES = ("viewer", "submitter", "approver", "admin")
 ARTIFACT_KINDS = ("md", "log", "transcript", "image", "json")
 REPO_KINDS = ("github", "local")
 DECISION_PURPOSES = ("model", "triage")
+IMPROVEMENT_STATUSES = (
+    "queued",
+    "analyzing",
+    "proposing",
+    "validating",
+    "benchmarking",
+    "pr_open",
+    "branch_ready",
+    "no_change",
+    "rejected",
+    "failed",
+    "merged",
+    "closed",
+)
+IMPROVEMENT_DONE = frozenset(
+    {"pr_open", "branch_ready", "no_change", "rejected", "failed", "merged", "closed"}
+)
+IMPROVEMENT_TRIGGERS = ("threshold", "age", "manual")
 BENCH_STATUSES = ("running", "done", "stopped_budget", "cancelled")
 BENCH_RESULT_STATUSES = (
     "pending",
@@ -489,8 +507,21 @@ class Improvement(Base):
     pr_url: Mapped[str | None] = mapped_column(Text)
     bench_run_before: Mapped[uuid.UUID | None] = _fk("app.bench_runs.id")
     bench_run_after: Mapped[uuid.UUID | None] = _fk("app.bench_runs.id")
-    status: Mapped[str] = mapped_column(Text, server_default="pending")
+    status: Mapped[str] = mapped_column(Text, server_default="queued")
+    job_id: Mapped[uuid.UUID | None] = _fk("app.jobs.id")
+    cycle_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    base_sha: Mapped[str] = mapped_column(Text)
+    proposed_sha: Mapped[str | None] = mapped_column(Text)
+    suite: Mapped[str] = mapped_column(Text)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), server_default=text("0"))
+    evidence: Mapped[Any] = _jsonb("{}", nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _ts()
+    updated_at: Mapped[datetime] = _ts()
+    __table_args__ = (
+        _check("improvements", "status", IMPROVEMENT_STATUSES),
+        _check("improvements", "trigger", IMPROVEMENT_TRIGGERS),
+    )
 
 
 class Command(Base):

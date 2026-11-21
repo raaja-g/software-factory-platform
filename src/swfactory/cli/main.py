@@ -1376,6 +1376,147 @@ def models_list(
         typer.echo(line)
 
 
+improve_app = typer.Typer(
+    help="Improver commands (read and write the database directly)", no_args_is_help=True
+)
+app.add_typer(improve_app, name="improve")
+
+
+def _improve_db(fn: Any, *args: Any) -> Any:
+    """Run ``fn(sessions, *args)`` against the database; the improver CLI has no API route."""
+    settings = get_settings()
+
+    async def run() -> Any:
+        engine = make_engine(settings.sqlalchemy_url())
+        try:
+            return await fn(make_sessionmaker(engine), *args)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(run())
+
+
+async def _improve_status_data(sessions: Any) -> dict[str, Any] | None:
+    from datetime import UTC, datetime
+
+    from swfactory.definition.store import load_active
+    from swfactory.improve.graph import improver_status
+
+    async with sessions() as s:
+        found = await load_active(s)
+        if found is None:
+            return None
+        return await improver_status(s, found[1], now=datetime.now(UTC))
+
+
+async def _improve_run_data(sessions: Any, role: str | None) -> dict[str, Any]:
+    from swfactory.db.tables import Improvement
+    from swfactory.definition.store import load_active
+    from swfactory.domain.types import Role
+    from swfactory.improve.graph import start_cycle
+
+    async with sessions() as s, s.begin():
+        found = await load_active(s)
+        if found is None:
+            return {"error": "no active definition"}
+        defn = found[1]
+        if not defn.factory.improver.bench_suite:
+            return {"error": "set improver.bench_suite first"}
+        ids = await start_cycle(
+            s, defn, trigger="manual", role=Role(role) if role is not None else None
+        )
+        rows = [await s.get(Improvement, i) for i in ids]
+    return {"started": [{"id": str(r.id), "role_group": r.role_group} for r in rows if r]}
+
+
+async def _improve_list_data(sessions: Any, limit: int) -> list[dict[str, Any]]:
+    from sqlalchemy import select
+
+    from swfactory.db.tables import Improvement
+
+    async with sessions() as s:
+        rows = await s.scalars(
+            select(Improvement).order_by(Improvement.created_at.desc()).limit(limit)
+        )
+        return [
+            {
+                "id": str(r.id),
+                "role_group": r.role_group,
+                "trigger": r.trigger,
+                "status": r.status,
+                "pr_url": r.pr_url,
+                "created_at": r.created_at.isoformat(timespec="seconds"),
+            }
+            for r in rows
+        ]
+
+
+@improve_app.command("status")
+def improve_status():
+    """Show the failures counted against the improver's trigger."""
+    st = _improve_db(_improve_status_data)
+    if st is None:
+        typer.echo("no active definition")
+        raise typer.Exit(1)
+    state = "enabled" if st["enabled"] else "disabled"
+    typer.echo(f"improver: {state}, benchmark suite {st['suite'] or '(not set)'}")
+    typer.echo(f"failures since last improvement: {st['failures']} of {st['threshold']}")
+    typer.echo(f"last improvement: {st['last_improvement_at'] or 'none yet'}")
+    typer.echo(
+        f"oldest failure: {st['oldest_failure_at'] or 'none'} "
+        f"(age trigger after {st['max_failure_age_days']} days)"
+    )
+    typer.echo(f"next trigger: {st['due'] or 'none'}")
+    for row in st["in_progress"]:
+        typer.echo(f"in progress: {row['role_group']} ({row['status']})")
+
+
+@improve_app.command("run")
+def improve_run(
+    role: Annotated[str | None, typer.Option("--role", help="Only this role group")] = None,
+):
+    """Start an improvement cycle now (even when the improver is disabled)."""
+    from swfactory.domain.types import Role
+
+    if role is not None:
+        try:
+            Role(role)
+        except ValueError:
+            typer.echo(f"unknown role '{role}'")
+            raise typer.Exit(2) from None
+    out = _improve_db(_improve_run_data, role)
+    if "error" in out:
+        typer.echo(out["error"])
+        raise typer.Exit(1)
+    if not out["started"]:
+        typer.echo(
+            "nothing to improve: no failure signals since the last improvement, "
+            "or every role group already has an improvement open"
+        )
+        return
+    for row in out["started"]:
+        typer.echo(f"queued improvement {row['id']} for {row['role_group']}")
+    if not get_settings().definition_source:
+        typer.echo(
+            "warning: no definition source is configured here (FACTORY_DEFINITION_SOURCE), so a "
+            "worker started with this configuration has no improver ticker and nothing will pick "
+            "these up; they fail after 72 h"
+        )
+    else:
+        typer.echo("a worker picks them up on its next improver tick (hourly)")
+
+
+@improve_app.command("list")
+def improve_list(
+    limit: Annotated[int, typer.Option(min=1, max=200, help="How many to show")] = 20,
+):
+    """List improvements, newest first."""
+    for r in _improve_db(_improve_list_data, limit):
+        typer.echo(
+            f"{r['created_at']} {r['role_group']} {r['trigger']} {r['status']} {r['pr_url'] or '-'}"
+        )
+
+
 tokens_app = typer.Typer(
     help="API token commands (write the database directly)", no_args_is_help=True
 )

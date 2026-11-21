@@ -10,3 +10,4 @@ roles:
   reviewer-ui:       { engine: direct,   model: local@ollama }
   approver:          { engine: direct,   model: local@ollama }
   judge:             { engine: direct,   model: local@ollama }
+  improver:          { engine: opencode, model: local@ollama }

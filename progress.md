@@ -4,7 +4,7 @@ Updated after every completed step.
 
 ## Now
 
-M11 is done (Laya); next is M12 (the improver). M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
+M12 is done (the improver). All planned milestones are built; what remains is the live pass (real models, a GitHub token or App, registries) and the deferred GCP work. M0's spikes wait for your gcloud/ADC login, Model Garden access and ~$10 of spend.
 
 ## Plan revision (before coding)
 
@@ -126,6 +126,14 @@ M11 is done (Laya); next is M12 (the improver). M0's spikes wait for your gcloud
 - [x] **2026-11-19** M7 checked by me: 1016 default tests (run with Postgres down, so none depends on the database), all database tests (run in chunks), 80 Docker tests and 42 dashboard tests pass; `make up` brings the whole stack healthy in 38 s and `/readyz` shows one worker, the database and the definition.
 - [x] **2026-11-19** Fixes made while checking: old CLI tests rewritten for the API-based CLI (who-asked now comes from the signed-in user); the gateway stack tests got a mock-model compose override (the gateway now reads a rendered config); a loader test no longer depends on a developer's `.env`; a unit test that was quietly querying the dev database now uses a stub; the notification webhook now reaches the API and worker in compose.
 - [ ] **Needs you:** the live acceptance replay (`make up` then `pytest -m e2e tests/e2e/test_v1_parity.py`) and real registry connections need Vertex credentials, models and your registries.
+
+## M12 Improver (done)
+
+- [x] **2026-11-21** M12.1 improver config, `improvements` columns, app-less improver jobs; M12.2 failure signals and the trigger; M12.3 proposal guardrails; M12.4 definition workspace (seed the sandbox, read back, commit and push a branch); M12.5 benchmark comparison and the PR body; M12.6 the improver graph; M12.7 periodic trigger, cycles, leases and CLI; M12.8 improvements API and dashboard page
+- [x] **2026-11-21** Independent hostile review of the guardrails found 2 high and 4 medium problems, all proved with reproductions and all fixed with tests that fail on the old code: the "before" side of every check came from the agent's own sandbox repo (it has a shell, so it could commit a forbidden change first and then make a small allowed edit); the cross-family check used the proposed builder against base aliases; budget keys were too wide (`job_max_usd: 9999`, `daily_usd: 0` passed); the improver could change its own judges' thresholds; PR bodies let agent text through as links, images and a forged result table; the strength check hid a downgrade behind a weak fallback. Also: narrower GitHub permissions, `model_family` hardened against provider prefixes, role frontmatter locked, branch names that cannot collide after a merged PR, queued improvements that time out, fail-closed on a missing definition or unreadable cost
+- [x] **2026-11-21** Checked by me: 1842 default tests; the improver database tests; ruff and pyright clean. Disk was at 89% and the worker's 85% guard made 32 unrelated tests fail until the guard was raised for the test run
+- [ ] **Known gaps:** the plan's redraft rule only forbids pure appends, so a prepend or middle insert still passes; no rate limit on starting cycles; viewers can see signal details across apps
+- [ ] **Needs you:** a capable model and real failures before the improver can propose anything real; set `improver: {enabled: true, bench_suite: v1-parity}` to switch it on
 
 ## M11 Laya (done)
 

@@ -152,7 +152,7 @@ async def _candidates(s: AsyncSession, exclude: list[str]) -> list[tuple[str, st
                 SELECT DISTINCT ON (j.app_id) j.id, j.app_id, j.created_at
                   FROM app.jobs j JOIN jsonb_each_text(CAST(:limits AS jsonb)) l(app_id, lim)
                     ON j.app_id = l.app_id::uuid
-                 WHERE j.kind IN {_NORMAL_KINDS} AND app.backlog_turn(j)
+                 WHERE j.kind IN {_NORMAL_KINDS} AND j.kind <> 'improver' AND app.backlog_turn(j)
                    AND (j.stage = 'queued' OR j.stage = ANY(CAST(:active_stages AS text[])))
                    AND (j.lease_until IS NULL OR j.lease_until < now())
                    AND (j.retry_after IS NULL OR j.retry_after <= now())
@@ -249,7 +249,8 @@ async def _try_claim(
             row = await s.scalar(
                 text(
                     f"SELECT id FROM app.jobs j WHERE app_id = CAST(:a AS uuid) "
-                    f"AND kind IN {_NORMAL_KINDS} AND app.backlog_turn(j) AND {_CLAIMABLE} "
+                    f"AND kind IN {_NORMAL_KINDS} AND kind <> 'improver' "
+                    f"AND app.backlog_turn(j) AND {_CLAIMABLE} "
                     "ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED"
                 ),
                 {**params, "a": app_id},

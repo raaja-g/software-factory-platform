@@ -1043,8 +1043,85 @@ async function showBacklog() {
   await load();
 }
 
+/* ── improvements ───────────────────────────────── */
+const safeUrl = (u) => (/^https:\/\/[^\s]+$/.test(String(u || '')) ? String(u) : null);
+function improvementPanel(d) {
+  const ev = d.evidence || {};
+  const kids = [h('h3', { text: `${d.role_group} · ${d.status}` })];
+  if (d.status === 'branch_ready' && d.branch) {
+    kids.push(h('p', { class: 'hint', text: `Merge it yourself after review: git diff main...${d.branch}` }));
+  }
+  if (d.status === 'pr_open') kids.push(h('p', { class: 'hint', text: 'Review and merge the pull request on the definition repo.' }));
+  if (d.error) kids.push(h('p', { class: 'status-line err', text: d.error }));
+  kids.push(h('h4', { text: 'Regressions addressed' }));
+  const sigs = ev.signals || [];
+  kids.push(sigs.length ? h('ul', { class: 'signals' }, sigs.map((x) => h('li', {},
+    h('a', { href: `#/job/${encodeURIComponent(x.job_ref)}`, text: x.job_ref }), ' ',
+    h('span', { class: 'muted', text: `${x.role} · ${x.kind}` }), ' ', h('span', { text: x.detail }))))
+    : h('p', { class: 'muted', text: 'None recorded.' }));
+  const cmp = ev.comparison || [];
+  kids.push(h('h4', { text: 'Before and after' }));
+  kids.push(h('div', { class: 'table-wrap' }, h('table', { class: 'data', 'aria-label': 'Before and after' },
+    h('thead', {}, h('tr', {}, ['Configuration', 'Hidden checks before', 'Hidden checks after', 'Cost per task before', 'Cost per task after'].map((c) => h('th', { text: c })))),
+    h('tbody', {}, cmp.length ? cmp.map((c) => h('tr', {}, h('td', { text: c.config }), h('td', { text: pct(c.hidden_before) }), h('td', { text: pct(c.hidden_after) }),
+      h('td', { text: money(c.mean_cost_before) || 'n/a' }), h('td', { text: money(c.mean_cost_after) || 'n/a' })))
+      : h('tr', {}, h('td', { colspan: '5', class: 'muted', text: `Not measured yet (result: ${d.result})` }))))));
+  const vs = ev.violations || [];
+  if (d.status === 'rejected' || vs.length) {
+    kids.push(h('h4', { text: 'Guardrail violations' }));
+    kids.push(h('ul', { class: 'violations' }, vs.map((v) => h('li', {}, h('span', { class: 'mono', text: v.rule || '' }), ' ', v.path ? h('span', { class: 'mono', text: v.path }) : null, ' ', h('span', { text: v.detail || v.message || '' })))));
+  }
+  const ch = ev.changes || [];
+  kids.push(h('h4', { text: 'Files changed' }));
+  kids.push(ch.length ? h('ul', { class: 'changes' }, ch.map((c) => h('li', { class: 'mono', text: `${c.status} ${c.path}` }))) : h('p', { class: 'muted', text: 'None.' }));
+  const c = ev.costs || {};
+  kids.push(h('h4', { text: 'Cost' }));
+  kids.push(h('ul', { class: 'costs' },
+    h('li', { text: `Improver job ${money(c.improver_usd)}` }),
+    h('li', { text: `Benchmark before ${money(c.bench_before_usd)}` }),
+    h('li', { text: `Benchmark after ${money(c.bench_after_usd)}` }),
+    h('li', { text: `Total ${money(c.total_usd)}` })));
+  return h('div', { class: 'metric-block improvement-panel', role: 'region', 'aria-label': 'Improvement details' }, kids);
+}
+async function showImprovements() {
+  const rows = await apiJson('/api/improvements?limit=50');
+  const panel = h('div', { class: 'improvement-detail' });
+  const note = h('p', { class: 'status-line', role: 'status' });
+  const open = async (r) => {
+    try { panel.replaceChildren(improvementPanel(await apiJson('/api/improvements/' + encodeURIComponent(r.id)))); } catch (e) { panel.replaceChildren(h('p', { class: 'status-line err', text: e.message })); }
+  };
+  const kids = [];
+  if (can('admin')) {
+    kids.push(h('p', {}, h('button', { class: 'btn primary', type: 'button', text: 'Run improver now', on: { click: async (e) => {
+      e.target.disabled = true;
+      try {
+        const out = await apiJson('/api/improvements/run', { json: {} });
+        note.className = 'status-line';
+        note.textContent = out.ids.length ? `Started ${out.ids.length} improvement${out.ids.length === 1 ? '' : 's'}.` : 'Nothing to improve yet.';
+        if (out.ids.length) await showImprovements();
+      } catch (err) { note.className = 'status-line err'; note.textContent = err.message; }
+      e.target.disabled = false;
+    } } })), note);
+  }
+  const prCell = (r) => {
+    const u = safeUrl(r.pr_url);
+    return h('td', {}, u ? h('a', { href: u, target: '_blank', rel: 'noopener noreferrer', text: 'Pull request' }) : h('span', { class: 'muted', text: r.branch || '' }));
+  };
+  kids.push(h('div', { class: 'table-wrap' }, h('table', { class: 'tbl improvements' },
+    h('thead', {}, h('tr', {}, ['Started', 'Role group', 'Trigger', 'Status', 'Pull request', 'Hidden checks', 'Cost'].map((c) => h('th', { text: c })))),
+    h('tbody', {}, rows.length ? rows.map((r) => h('tr', { class: 'clickable', on: { click: () => open(r) } },
+      h('td', { text: ago(r.created_at) }),
+      h('td', {}, h('button', { class: 'linklike', type: 'button', text: r.role_group, on: { click: (e) => { e.stopPropagation(); open(r); } } })),
+      h('td', { text: r.trigger }), h('td', { text: r.status }), prCell(r),
+      h('td', { text: `${pct(r.hidden_before)} → ${pct(r.hidden_after)} (${r.result})` }),
+      h('td', { text: money(r.cost_usd) })))
+      : h('tr', {}, h('td', { colspan: '7', class: 'muted', text: 'No improvements yet' }))))));
+  kids.push(panel);
+  $('#main').replaceChildren(page('Improvements', ...kids));
+}
+
 /* ── routing ────────────────────────────────────── */
-const VIEWS = { backlogs: showBacklogs, backlog: showBacklog, new: showNew, run: showRun, apps: showApps, models: showModels, profiles: showProfiles, definition: showDefinition, metrics: showMetrics, benchmarks: showBenchmarks };
+const VIEWS = { backlogs: showBacklogs, backlog: showBacklog, new: showNew, run: showRun, apps: showApps, models: showModels, profiles: showProfiles, definition: showDefinition, metrics: showMetrics, benchmarks: showBenchmarks, improvements: showImprovements };
 async function route() {
   let hash = '';
   try { hash = decodeURIComponent(location.hash.slice(1)); } catch { /* malformed hash */ }

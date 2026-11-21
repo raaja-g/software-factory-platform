@@ -204,11 +204,13 @@ class GitHubClient:
         *,
         http: httpx.AsyncClient | None = None,
         api_url: str = API,
+        permissions: Mapping[str, str] = PERMS_DELIVER,
     ) -> None:
         owner, _, name = repo.partition("/")
         if not owner or not name:
             raise ValueError(f"repo must be owner/name, got {repo!r}")
         self._auth = auth
+        self._permissions = dict(permissions)  # what this client's installation token may do
         self._repo = repo
         self._owner = owner
         self._queue = queue
@@ -240,7 +242,7 @@ class GitHubClient:
             "X-GitHub-Api-Version": "2022-11-28",
         }
         if headers is None:
-            token = await self._auth.token_for(self._repo, PERMS_DELIVER)
+            token = await self._auth.token_for(self._repo, self._permissions)
             h["Authorization"] = f"Bearer {token}"
         else:
             h.update(headers)

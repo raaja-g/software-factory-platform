@@ -82,7 +82,7 @@ class ResolvedProfile:
 
 def resolve_profile(
     defn: Definition,
-    app: AppDef,
+    app: AppDef | None,
     *,
     override: str | None,
     triage_profile: str | None,
@@ -93,9 +93,9 @@ def resolve_profile(
     ``role_overrides`` (benchmark configurations) replace each set field of a role's model."""
     if override is not None:
         name, source = override, "override"
-    elif triage_profile is not None and triage_profile in app.allowed_profiles:
+    elif app is not None and triage_profile is not None and triage_profile in app.allowed_profiles:
         name, source = triage_profile, "triage"
-    elif app.profile is not None:
+    elif app is not None and app.profile is not None:
         name, source = app.profile, "app"
     else:
         name, source = defn.factory.defaults.profile, "global"
@@ -121,11 +121,31 @@ def resolve_profile(
     return resolved, source
 
 
+# Host names that can prefix a model id (`anthropic/claude-x`, `vertex_ai/gemini-4`,
+# `ollama:qwen2.5`, bedrock's `us.anthropic.claude-x`) and say nothing about the model's family.
+_HOSTS = (
+    "anthropic|google|vertex_ai|vertex|openai|meta-llama|meta|mistralai|deepseek-ai|openrouter|"
+    "ollama|groq|bedrock|azure|together_ai|huggingface|models|us|eu|apac|global"
+)
+_HOST_PREFIX = re.compile(rf"^(?:{_HOSTS})[:.]")
+
+
 def model_family(upstream_id: str) -> str:
-    uid = upstream_id.lower()
-    if uid.startswith("gpt-") or _OPENAI_O.match(uid):
+    """The model's own family (claude, gemini, openai, qwen, ...), not its host's.
+
+    D17 compares these, so `anthropic/claude-sonnet-5`, `  Claude-Sonnet-5` and the bare id must
+    all give the same answer: whitespace and case are dropped, the last `/` segment is the model,
+    and a known host prefix (`provider:`, `provider.`) is peeled off."""
+    uid = " ".join(str(upstream_id).lower().split())
+    seg = uid.rsplit("/", 1)[-1].strip()
+    while (m := _HOST_PREFIX.match(seg)) is not None and len(seg) > m.end():
+        seg = seg[m.end() :]
+    if seg.startswith("gpt-") or _OPENAI_O.match(seg):
         return "openai"
-    return re.split(r"[-/]", uid, maxsplit=1)[0]
+    letters = re.match(r"[a-z]+", seg)
+    if letters is not None:
+        return "openai" if letters.group(0) == "gpt" else letters.group(0)
+    return re.split(r"[-/]", seg, maxsplit=1)[0]
 
 
 def engine_support(engine: str, info: ModelInfo) -> EngineSupport:

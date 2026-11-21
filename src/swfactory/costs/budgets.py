@@ -94,7 +94,7 @@ class BudgetService:
         out = _Scopes()
         out.add(
             "job",
-            job.budget_usd,
+            job.budget_usd if job.budget_usd is not None else defn.factory.budgets.job_usd,
             await repo.spend_for_job(s, job.id),
             await repo.open_reservations(s, job_id=job.id),
         )

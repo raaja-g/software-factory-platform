@@ -37,6 +37,7 @@ from swfactory.api.routes import bench as bench_routes
 from swfactory.api.routes import board as board_routes
 from swfactory.api.routes import definition as definition_routes
 from swfactory.api.routes import hooks as hooks_routes
+from swfactory.api.routes import improve as improve_routes
 from swfactory.api.routes import jobs as jobs_routes
 from swfactory.api.routes import metrics as metrics_routes
 from swfactory.api.routes import models as models_routes
@@ -322,6 +323,7 @@ def create_app(
         models_routes,
         profiles_routes,
         definition_routes,
+        improve_routes,
         metrics_routes,
         runs_routes,
     ):

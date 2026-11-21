@@ -42,6 +42,7 @@ from swfactory.domain.types import (
     AgentTask,
     CostSource,
     Decision,
+    EngineSupport,
     JobKind,
     Role,
     RunStatus,
@@ -159,8 +160,8 @@ class StepOutcome:
     diff_cut: bool = False  # the rendered prompt cut diff.patch (M3.6)
 
 
-async def pinned_definition(deps: Deps, job_id: UUID) -> tuple[Job, Definition, AppDef]:
-    """The job row, its pinned definition and its app; never the active definition."""
+async def pinned_job(deps: Deps, job_id: UUID) -> tuple[Job, Definition, AppDef | None]:
+    """Like pinned_definition, but an improver job has no app (None); every other job needs one."""
     async with deps.sessions() as s:
         job = await s.get(Job, job_id)
     if job is None:
@@ -168,11 +169,21 @@ async def pinned_definition(deps: Deps, job_id: UUID) -> tuple[Job, Definition, 
     defn = await deps.definitions.get(job.definition_sha) if job.definition_sha else None
     if defn is None:
         raise RuntimeError(f"definition {job.definition_sha} of job {job_id} is missing")
+    if job.app_id is None and job.kind == JobKind.IMPROVER.value:
+        return job, defn, None
     async with deps.sessions() as s:
         slug = await s.scalar(select(App.slug).where(App.id == job.app_id))
     if slug is None or slug not in defn.factory.apps:
         raise RuntimeError(f"app of job {job_id} is not in definition {job.definition_sha}")
     return job, defn, defn.factory.apps[slug]
+
+
+async def pinned_definition(deps: Deps, job_id: UUID) -> tuple[Job, Definition, AppDef]:
+    """The job row, its pinned definition and its app; never the active definition."""
+    job, defn, app = await pinned_job(deps, job_id)
+    if app is None:
+        raise RuntimeError(f"job {job_id} has no app")
+    return job, defn, app
 
 
 async def benchmark_overrides(deps: Deps, job: Job) -> dict[str, Any] | None:
@@ -358,20 +369,22 @@ def _parse_contract(contract: str, text: str | None) -> tuple[Verdict | None, De
     return None, None
 
 
-def _runner(defn: Definition, app: AppDef) -> RunnerSpec:
-    r = defn.runners.get(app.runner)
+def _runner(defn: Definition, app: AppDef | None) -> RunnerSpec:
+    name = app.runner if app is not None else "standard"  # an app-less job uses the standard runner
+    r = defn.runners.get(name)
     if r is None:
-        return RunnerSpec(app.runner, "factory-runner", 2.0, 4096, 512, ())
+        return RunnerSpec(name, "factory-runner", 2.0, 4096, 512, ())
     return RunnerSpec(
-        app.runner, r.image, r.cpus, r.memory_mb, r.pids, r.allowed_hosts, max_work_gb=r.max_work_gb
+        name, r.image, r.cpus, r.memory_mb, r.pids, r.allowed_hosts, max_work_gb=r.max_work_gb
     )
 
 
 async def job_sandbox(deps: Deps, job_id: UUID) -> Sandbox:
     """The job's sandbox, with its repository restored when the volume has none (not in prepare)."""
-    job, defn, app = await pinned_definition(deps, job_id)
+    job, defn, app = await pinned_job(deps, job_id)
     box = await deps.sandboxes.ensure(job_id, _runner(defn, app))
-    if await box.read_bytes(f"{REPO}/.git/HEAD") is None:
+    # an app-less job's repository is seeded by its graph (seed_sandbox owns REPO)
+    if app is not None and await box.read_bytes(f"{REPO}/.git/HEAD") is None:
         async with running(box):
             await deps.git.prepare(job, app, box)  # restores the kept branch (M4.5)
     return box
@@ -625,8 +638,10 @@ async def run_agent_step(
     if tool_policy == ToolPolicy.READ_RUN and sandbox is None:
         raise ValueError("read_run requires an isolated sandbox")
     with log_context(role=role.value):
-        job, defn, app = await pinned_definition(deps, job_id)
-        slug = next(k for k, v in defn.factory.apps.items() if v is app)
+        job, defn, app = await pinned_job(deps, job_id)
+        slug = (
+            "improver" if app is None else next(k for k, v in defn.factory.apps.items() if v is app)
+        )
         spec = deps.roles.get(role, definition_sha=job.definition_sha)
         tool_policy = effective_tool_policy(spec.tool_policy, tool_policy)
         isolated = sandbox is not None
@@ -676,7 +691,7 @@ async def _run_in_box(
     box: Sandbox | None,
     *,
     job: Job,
-    app: AppDef,
+    app: AppDef | None,
     role: Role,
     round: int,
     inputs: Sequence[str],
@@ -807,7 +822,7 @@ async def _attempt(
     box: Sandbox | None,
     *,
     job: Job,
-    app: AppDef,
+    app: AppDef | None,
     defn: Definition,
     role: Role,
     round: int,
@@ -850,6 +865,10 @@ async def _attempt(
         picked = await deps.selector.choose(profile, sel_ctx, exclude=set(exclude))
     engine_name = engine or picked.engine
     info = await deps.catalog.get(picked.model.alias)
+    if engine is not None and engine != picked.engine and info is not None:
+        # a forced engine still has to support the profile's model
+        if get_engine(engine).support_for(info) == EngineSupport.NO:
+            raise RuntimeError(f"engine '{engine}' does not support model '{picked.model.alias}'")
     models = [picked.model.alias]
     if engine_name == "claude_code":
         for alias in defn.factory.defaults.claude_classifier_fallbacks:
