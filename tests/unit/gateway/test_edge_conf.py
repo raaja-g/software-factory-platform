@@ -48,6 +48,6 @@ def test_allowlist_regexes_accept_and_refuse():
 def test_gateway_settings_defaults(monkeypatch):
     monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-test-master")
     s = Settings(_env_file=None, FACTORY_DATABASE_URL="postgresql+psycopg://u@h/d")
-    assert s.gateway_url == "http://127.0.0.1:4000"
+    assert s.gateway_url == "http://127.0.0.1:7400"
     assert s.gateway_sandbox_url == "http://gateway-edge:4000"
     assert s.gateway_master_key.get_secret_value() == "sk-test-master"

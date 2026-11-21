@@ -1,6 +1,8 @@
 """FastAPI application factory."""
 
 import asyncio
+import hashlib
+import hmac
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -12,6 +14,7 @@ import structlog
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -21,6 +24,7 @@ from swfactory.api.auth import (
     SESSION_COOKIE,
     IapKeys,
     LoginCodes,
+    LoginThrottle,
     ModeError,
     Principal,
     UserDirectory,
@@ -227,6 +231,7 @@ def create_app(
     app.state.mode = mode
     app.state.deps = deps
     app.state.personal_token = personal_token
+    app.state.login_throttle = LoginThrottle()
     app.state.login_codes = LoginCodes()
     app.state.iap_keys = iap_keys or IapKeys()
 
@@ -283,6 +288,10 @@ def create_app(
         if not code or not request.app.state.login_codes.redeem(code):
             raise HTTPException(status_code=401, detail="unauthorized")
         response = RedirectResponse("/", status_code=303)
+        _set_session(response)
+        return response
+
+    def _set_session(response: Response) -> None:
         response.set_cookie(
             SESSION_COOKIE,
             session_value(personal_token),
@@ -290,8 +299,8 @@ def create_app(
             samesite="strict",
             path="/",
             secure=False,
+            max_age=settings.session_days * 86400,
         )
-        return response
 
     api = APIRouter(prefix="/api")
 
@@ -313,6 +322,55 @@ def create_app(
             raise HTTPException(status_code=401, detail="unauthorized")
         return {"code": request.app.state.login_codes.issue()}
 
+    class PasswordLogin(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        username: str = Field(default="", max_length=128)
+        password: str = Field(default="", max_length=256)
+
+    def _same(given: str, expected: str) -> bool:
+        return hmac.compare_digest(
+            hashlib.sha256(given.encode()).digest(), hashlib.sha256(expected.encode()).digest()
+        )
+
+    @api.post("/login")
+    async def password_login(request: Request, body: PasswordLogin) -> Response:
+        """The dashboard's login form: the password is FACTORY_LOGIN_PASSWORD, or the API token."""
+        if mode is not FactoryMode.PERSONAL:
+            raise HTTPException(status_code=404)
+        throttle: LoginThrottle = request.app.state.login_throttle
+        wait = throttle.retry_after()
+        if wait:
+            return JSONResponse(
+                {"detail": f"too many attempts, try again in {wait} seconds"},
+                status_code=429,
+                headers={"Retry-After": str(wait)},
+            )
+        expected = (
+            settings.login_password.get_secret_value()
+            if settings.login_password
+            else personal_token
+        )
+        expected_user = (settings.login_user or settings.local_user).lower()
+        # both are always compared, so a wrong login never reveals which part was wrong
+        user_ok = _same(body.username.strip().lower(), expected_user)
+        password_ok = _same(body.password, expected)
+        if not (user_ok and password_ok and body.username.strip() and body.password):
+            throttle.failed()
+            await asyncio.sleep(0.5)  # slows a guessing script; a person will not notice
+            return JSONResponse({"detail": "wrong username or password"}, status_code=401)
+        throttle.succeeded()
+        response = JSONResponse({"ok": True})
+        _set_session(response)
+        return response
+
+    @api.post("/logout")
+    async def logout() -> Response:
+        if mode is not FactoryMode.PERSONAL:
+            raise HTTPException(status_code=404)
+        response = JSONResponse({"ok": True})
+        response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, samesite="strict")
+        return response
+
     api.include_router(sse_router)
     api.include_router(board_routes.router)
     api.include_router(jobs_routes.router)
@@ -330,7 +388,8 @@ def create_app(
         api.include_router(r.router)
     app.include_router(api)
     app.include_router(hooks_routes.router)  # before /hooks/{name} (M8.8b)
-    app.mount("/", _WebFiles(directory=WEB_DIR, html=True, check_dir=False), name="web")
+    if settings.serve_web:  # off when a separate UI container serves the dashboard
+        app.mount("/", _WebFiles(directory=WEB_DIR, html=True, check_dir=False), name="web")
     return app
 
 

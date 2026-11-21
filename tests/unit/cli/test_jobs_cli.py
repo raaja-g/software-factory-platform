@@ -97,3 +97,17 @@ def test_cli_follow_up(mock_api):
     r = run("jobs", "follow-up", "demo-gh:001", "rename X")
     assert r.stdout.strip() == f"queued demo-gh:002 {ID2}"
     assert mock_api.bodies[-1] == {"note": "rename X"}
+
+
+def test_dashboard_opens_the_login_link_in_the_browser(mock_api, monkeypatch):
+    opened: list[str] = []
+    monkeypatch.setattr("webbrowser.open", lambda url, *a, **k: opened.append(url) or True)
+    out = run("dashboard").output.strip()
+    assert out.endswith("/login?code=abc") and opened == [out]
+
+
+def test_dashboard_no_open_only_prints_the_link(mock_api, monkeypatch):
+    opened: list[str] = []
+    monkeypatch.setattr("webbrowser.open", lambda url, *a, **k: opened.append(url) or True)
+    out = run("dashboard", "--no-open").output.strip()
+    assert out.endswith("/login?code=abc") and opened == []

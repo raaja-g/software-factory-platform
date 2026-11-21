@@ -63,7 +63,7 @@ CTX = PrContext(
     comparison=Comparison(((st("gemini", 0.6, "4.00"), st("gemini", 0.8, "4.50")),), "better", 5),
     improver_cost_usd=Decimal("40.10"),
     bench_cost_usd=(Decimal("4.00"), Decimal("4.50")),
-    dashboard_url="http://localhost:8080",
+    dashboard_url="http://localhost:7080",
 )
 
 

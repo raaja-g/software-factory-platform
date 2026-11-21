@@ -261,7 +261,9 @@ def test_viewer_sees_no_backlog_buttons(page_viewer):
     for ref in ("todo:b002", "todo:b003"):
         page_viewer.goto(f"#/backlog/{ref}")
         expect(page_viewer.locator(".backlog-status")).to_be_visible()
-        assert page_viewer.get_by_role("button").count() == 0
+        # no backlog actions (the header's Sign out button is not one)
+        buttons = page_viewer.get_by_role("button").filter(has_not_text="Sign out")
+        assert buttons.count() == 0
 
 
 def test_action_error_is_shown(page_approver_409):

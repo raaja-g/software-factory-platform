@@ -53,7 +53,7 @@ def test_real_deps_without_fake_script(settings, sessions, monkeypatch):
     deps = build_worker_deps(settings, sessions, fake_script=None)
     assert isinstance(deps.sandboxes, DockerSandboxProvider)
     assert isinstance(deps.git, GitDispatcher)
-    assert deps.gateway.base_url == settings.gateway_url == "http://127.0.0.1:4000"
+    assert deps.gateway.base_url == settings.gateway_url == "http://127.0.0.1:7400"
     for name in ("opencode", "claude_code", "gemini_cli", "direct"):
         assert get_engine(name).name == name
 

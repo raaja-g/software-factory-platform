@@ -118,7 +118,7 @@ def client_for(
     )
     deps.users.roles[email] = role  # pyright: ignore[reportAttributeAccessIssue]
     app = create_app(s, deps, on_gce=lambda: False, iap_keys=FakeKeys())  # pyright: ignore[reportArgumentType]
-    c = TestClient(app, base_url="http://127.0.0.1:8080")
+    c = TestClient(app, base_url="http://127.0.0.1:7080")
     if mode == "personal":
         c.headers["authorization"] = "Bearer sfp_personal_test_token"
     else:

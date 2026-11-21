@@ -43,7 +43,7 @@ def client(fake_bus):
     d = fake_deps(s)
     object.__setattr__(d, "events", fake_bus)
     app = create_app(s, d, on_gce=lambda: False, iap_keys=FakeKeys())  # pyright: ignore[reportArgumentType]
-    return TestClient(app, base_url="http://127.0.0.1:8080")
+    return TestClient(app, base_url="http://127.0.0.1:7080")
 
 
 def test_format_sse():

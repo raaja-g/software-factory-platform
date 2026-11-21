@@ -90,7 +90,7 @@ class Settings(BaseSettings):
         default=2_000_000, ge=10_000, validation_alias="FACTORY_EXEC_OUTPUT_MAX_BYTES"
     )
     gateway_url: str = Field(
-        default="http://127.0.0.1:4000", validation_alias="FACTORY_GATEWAY_URL"
+        default="http://127.0.0.1:7400", validation_alias="FACTORY_GATEWAY_URL"
     )
     laya_url: str | None = Field(default=None, validation_alias="FACTORY_LAYA_URL")
     laya_api_key: SecretStr | None = Field(default=None, validation_alias="LAYA_API_KEY")
@@ -122,7 +122,7 @@ class Settings(BaseSettings):
 
     iap_audience: str | None = Field(default=None, validation_alias="FACTORY_IAP_AUDIENCE")
     in_container: bool = Field(default=False, validation_alias="FACTORY_IN_CONTAINER")
-    api_url: str = Field(default="http://127.0.0.1:8080", validation_alias="FACTORY_API_URL")
+    api_url: str = Field(default="http://127.0.0.1:7080", validation_alias="FACTORY_API_URL")
     api_token: SecretStr | None = Field(default=None, validation_alias="FACTORY_API_TOKEN")
     api_token_file: Path = Field(
         default=Path("secrets/api_token"), validation_alias="FACTORY_API_TOKEN_FILE"
@@ -132,6 +132,16 @@ class Settings(BaseSettings):
         default=("127.0.0.1", "localhost"), validation_alias="FACTORY_ALLOWED_HOSTS"
     )
     public_url: str | None = Field(default=None, validation_alias="FACTORY_PUBLIC_URL")
+    # False when a separate UI container serves the dashboard and forwards /api and /login here
+    serve_web: bool = Field(default=True, validation_alias="FACTORY_SERVE_WEB")
+    # the dashboard's login (personal mode): the username defaults to the local user name, and the
+    # password to the API token when unset
+    login_user: str | None = Field(default=None, validation_alias="FACTORY_LOGIN_USER")
+    login_password: SecretStr | None = Field(
+        default=None, validation_alias="FACTORY_LOGIN_PASSWORD"
+    )
+    # how long the dashboard's session cookie lasts; a cookie with no lifetime ends with the browser
+    session_days: int = Field(default=30, ge=1, le=365, validation_alias="FACTORY_SESSION_DAYS")
     db_pool_size: int = Field(default=5, ge=1, validation_alias="FACTORY_DB_POOL_SIZE")
     db_max_overflow: int = Field(default=5, ge=0, validation_alias="FACTORY_DB_MAX_OVERFLOW")
     checkpointer_pool_max: int = Field(
@@ -208,6 +218,21 @@ class Settings(BaseSettings):
             elif name.endswith("_file") and isinstance(value, Path) and value.is_file():
                 register_secret(value.read_text().strip())
         return self
+
+    @field_validator("login_user")
+    @classmethod
+    def _login_user_blank_is_unset(cls, v: str | None) -> str | None:
+        v = (v or "").strip()
+        return v or None  # an empty line in .env means "not set": the local user name is used
+
+    @field_validator("login_password")
+    @classmethod
+    def _login_password_not_trivial(cls, v: SecretStr | None) -> SecretStr | None:
+        if v is None or not v.get_secret_value():
+            return None  # an empty line in .env means "not set"
+        if len(v.get_secret_value()) < 8:
+            raise ValueError("FACTORY_LOGIN_PASSWORD must be at least 8 characters")
+        return v
 
     def sqlalchemy_url(self) -> str:
         url = make_url(self.database_url.get_secret_value())

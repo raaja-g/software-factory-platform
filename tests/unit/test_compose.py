@@ -84,6 +84,7 @@ def test_default_services():
         "gateway-migrate",
         "docker-proxy",
         "api",
+        "ui",
         "orchestrator",
         "pkg-mirror",
         "pkg-mirror-pypi",
@@ -102,14 +103,15 @@ def test_no_shared_sandbox_network():
 
 def test_ports_loopback_only():
     assert sorted(p for s in svcs() for p in s.get("ports", [])) == [
-        "127.0.0.1:4000:4000",
-        "127.0.0.1:8080:8080",
+        "127.0.0.1:7000:7000",
+        "127.0.0.1:7080:7080",
+        "127.0.0.1:7400:4000",
     ]
 
 
 def test_postgres_not_published_by_default():
     assert "ports" not in svc("postgres")
-    assert test_override()["services"]["postgres"]["ports"] == ["127.0.0.1:5432:5432"]
+    assert test_override()["services"]["postgres"]["ports"] == ["127.0.0.1:7432:5432"]
 
 
 def test_postgres_pg18_layout():
@@ -144,7 +146,9 @@ def test_pinned_digests():
         n
         for n, s in svcs_items()
         if "image" in s
-        and not s["image"].startswith(("swfactory-platform", "swfactory/", "swfactory-router"))
+        and not s["image"].startswith(
+            ("swfactory-platform", "swfactory/", "swfactory-router", "swfactory-ui")
+        )
         and "@sha256:" not in s["image"]
     ] == []
 
@@ -244,9 +248,10 @@ def test_readme_quickstart():
     needed = [
         "make up",
         "make down",
-        "http://127.0.0.1:8080",
+        "http://127.0.0.1:7000",  # the dashboard
         "gcloud auth application-default login",
-        "factory login-url",
+        "FACTORY_LOGIN_PASSWORD",
+        "factory dashboard",
         "FACTORY_HOST_REPOS_ROOT",
         "factory run --repo",
     ]
@@ -460,3 +465,62 @@ def test_disk_high_water_reaches_the_platform_services():
         assert svc(name)["environment"]["FACTORY_DISK_HIGH_WATER_PCT"] == (
             "${FACTORY_DISK_HIGH_WATER_PCT:-85}"
         )
+
+
+def test_every_published_host_port_is_in_the_7xxx_range():
+    """Host ports sit in 7xxx so the stack does not collide with other apps on the machine
+    (8080, 5432 and 4000 are the usual defaults of other tools). Container ports are unchanged."""
+    published = [p for s in svcs() for p in s.get("ports", [])]
+    published += test_override()["services"]["postgres"]["ports"]
+    assert published
+    for mapping in published:
+        host, _, rest = mapping.partition(":")  # 127.0.0.1:7080:7080
+        assert host == "127.0.0.1", mapping
+        assert rest.split(":")[0].startswith("7"), mapping
+
+
+def test_the_dashboard_is_its_own_service_and_the_api_no_longer_serves_it():
+    api, ui = svc("api"), svc("ui")
+    assert api["environment"]["FACTORY_SERVE_WEB"] == "false"
+    assert "FACTORY_PUBLIC_URL" in api["environment"]  # so the API accepts the UI's origin
+    assert ui["ports"] == ["127.0.0.1:7000:7000"] and ui["networks"] == ["core-net"]
+    assert ui["depends_on"]["api"]["condition"] == "service_healthy"
+
+
+def test_the_ui_container_is_locked_down_like_the_gateway_edge():
+    ui = svc("ui")
+    assert ui["read_only"] is True and ui["cap_drop"] == ["ALL"]
+    assert "no-new-privileges:true" in ui["security_opt"]
+    assert "volumes" not in ui and "secrets" not in ui  # no state, no credentials
+    assert "environment" not in ui
+    assert "@sha256:" in Path("docker/ui.Dockerfile").read_text()
+
+
+def _nginx_locations(conf: str) -> list[tuple[str, str]]:
+    """(path, body) of every top-level `location` block, with nested braces matched."""
+    out = []
+    for m in re.finditer(r"location\s+([^{]+?)\s*\{", conf):
+        depth, i = 1, m.end()
+        while depth:
+            depth += {"{": 1, "}": -1}.get(conf[i], 0)
+            i += 1
+        out.append((m.group(1).strip(), conf[m.end() : i - 1]))
+    return out
+
+
+def test_the_ui_forwards_only_api_and_login_and_serves_static_files_read_only():
+    conf = Path("docker/ui.conf").read_text()
+    proxied = [path for path, body in _nginx_locations(conf) if "proxy_pass" in body]
+    assert proxied == ["/api/", "= /login"]
+    assert conf.count("proxy_pass") == 2
+    assert "limit_except GET HEAD" in conf and "limit_except GET {" in conf
+    for header in ("Content-Security-Policy", "X-Content-Type-Options", "Referrer-Policy"):
+        assert header in conf
+    assert "proxy_buffering off" in conf  # the /api/events stream
+
+
+def test_the_dashboard_password_reaches_only_the_api():
+    """The login form is served by the API, so it alone needs the password; nothing else does."""
+    assert "FACTORY_LOGIN_PASSWORD" in svc("api")["environment"]
+    for name in ("orchestrator", "ui", "gateway", "pkg-mirror-auth"):
+        assert "FACTORY_LOGIN_PASSWORD" not in svc(name).get("environment", {}), name

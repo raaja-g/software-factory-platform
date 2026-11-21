@@ -26,7 +26,7 @@ FIXTURE_APP = HERE / "fixtures" / "calc-app"
 DEFINITION = HERE / "definition"
 SERVICES = ("postgres", "gateway", "gateway-edge")
 IMAGES = ("swfactory/runner:0.1.0",)
-GATEWAY_URL = "http://127.0.0.1:4000"
+GATEWAY_URL = "http://127.0.0.1:7400"
 GATEWAY_SANDBOX_URL = "http://gateway-edge:4000"
 
 

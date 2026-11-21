@@ -1,4 +1,4 @@
-.PHONY: up down image login test-db
+.PHONY: up down image login dashboard test-db
 
 up:
 	@mkdir -p secrets
@@ -9,7 +9,7 @@ up:
 	@[ -f secrets/registry-credentials.json ] || (umask 077; echo '{}' > secrets/registry-credentials.json)
 	@[ -f .env ] || (umask 077; touch .env)
 	docker compose up -d --build --wait
-	@docker compose exec api factory login-url
+	@echo "Open http://127.0.0.1:7000 and sign in (password: FACTORY_LOGIN_PASSWORD in .env, else secrets/api_token). Or: make dashboard"
 
 down:
 	docker compose down
@@ -19,6 +19,10 @@ image:
 
 login:
 	@docker compose exec api factory login-url
+
+# Open the dashboard in your browser, already logged in
+dashboard:
+	@uv run factory dashboard
 
 test-db:
 	docker compose -f compose.yaml -f compose.test.yaml up -d --wait postgres migrate

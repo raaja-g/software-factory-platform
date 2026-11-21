@@ -92,7 +92,7 @@ async def api_db(sessions, tmp_path):
     )
     app = create_app(s, deps, on_gce=lambda: False, iap_keys=FakeKeys())  # pyright: ignore[reportArgumentType]
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8080"
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:7080"
     ) as c:
         yield Api(sessions, c)
 

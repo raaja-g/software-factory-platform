@@ -15,7 +15,7 @@ from swfactory.graph.steps import is_transient
 FIXTURES = Path(__file__).parent / "fixtures"
 MISSING = "/work/.factory/shots/missing.png"
 SHOT = "/work/.factory/shots/shot.png"
-BASE = "http://127.0.0.1:4000"
+BASE = "http://127.0.0.1:7400"
 
 pytestmark = pytest.mark.usefixtures("respx_mock")
 

@@ -39,7 +39,7 @@ def bearer(t):
 
 def make_client(s, **kw):
     app = create_app(s, fake_deps(s, **kw), on_gce=lambda: False, iap_keys=FakeKeys())  # pyright: ignore[reportArgumentType]
-    return TestClient(app, base_url="http://127.0.0.1:8080")
+    return TestClient(app, base_url="http://127.0.0.1:7080")
 
 
 @pytest.fixture
@@ -139,21 +139,21 @@ def test_web_root_serves_the_dashboard_with_security_headers(client_personal):
 
 
 def srv(**kw):
-    return settings(FACTORY_API_URL="http://127.0.0.1:8080", **kw)
+    return settings(FACTORY_API_URL="http://127.0.0.1:7080", **kw)
 
 
 @pytest.mark.parametrize(
     "origin, ok",
     [
         (None, True),
-        ("http://127.0.0.1:8080", True),
+        ("http://127.0.0.1:7080", True),
         (PUBLIC, True),
         ("https://factory.example.com:443", True),
         ("HTTPS://Factory.Example.com", True),
         ("http://factory.example.com", False),
         ("https://factory.example.com:8443", False),
         ("http://127.0.0.1", False),
-        ("http://localhost:8080", False),
+        ("http://localhost:7080", False),
         ("null", False),
         ("https://evil.example", False),
     ],

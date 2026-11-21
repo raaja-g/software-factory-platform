@@ -70,7 +70,7 @@ def _gw(method: str, path: str, **kw):
 
     return httpx.request(
         method,
-        f"http://127.0.0.1:4000{path}",
+        f"http://127.0.0.1:7400{path}",
         headers={"Authorization": f"Bearer {MASTER}"},
         timeout=60,
         **kw,
@@ -255,7 +255,7 @@ def test_platform_client_mints_and_reads_spend_on_the_open_source_gateway(stack)
     run = uuid4()
 
     async def go():
-        gw = GatewayClient("http://127.0.0.1:4000", MASTER)
+        gw = GatewayClient("http://127.0.0.1:7400", MASTER)
         try:
             key = await gw.mint_run_key(
                 run_id=run,
@@ -265,7 +265,7 @@ def test_platform_client_mints_and_reads_spend_on_the_open_source_gateway(stack)
                 ttl_s=300,
             )
             r = httpx.post(
-                "http://127.0.0.1:4000/v1/chat/completions",
+                "http://127.0.0.1:7400/v1/chat/completions",
                 headers={"Authorization": f"Bearer {key}"},
                 json=MOCK_CHAT,
                 timeout=60,

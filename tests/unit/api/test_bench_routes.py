@@ -75,7 +75,7 @@ def test_bench_add_writer_error_is_409(bench):
 
 
 def test_cli_client_round_trip_against_the_real_route(bench):
-    c = ApiClient("http://127.0.0.1:8080", "sfp_d")
+    c = ApiClient("http://127.0.0.1:7080", "sfp_d")
     c._http = bench.client  # the real app behind the real client methods  # pyright: ignore[reportAttributeAccessIssue]
     out = c.add_bench_task("todo:003", "v1", scorers=["merge-readiness"])
     assert out["task"] == "003-todo-web" and out["save"]["mode"] == "pr"
@@ -156,7 +156,7 @@ def test_run_route_conflict_on_changed_estimate(runs):
 
 
 def test_cli_client_round_trip_estimate_and_run(runs):
-    c = ApiClient("http://127.0.0.1:8080", "sfp_d")
+    c = ApiClient("http://127.0.0.1:7080", "sfp_d")
     c._http = runs.client  # pyright: ignore[reportAttributeAccessIssue]
     est = c.bench_estimate("v1-parity", configs=["gemini"], repetitions=2)
     assert est["trials"] == 12 and runs.seen["estimate"]["configs"] == ["gemini"]
@@ -286,7 +286,7 @@ def test_unknown_run_is_404(reports):
 
 def test_cli_report_round_trip_against_the_real_route(reports, monkeypatch):
     c = reports()
-    cl = ApiClient("http://127.0.0.1:8080", "sfp_d")
+    cl = ApiClient("http://127.0.0.1:7080", "sfp_d")
     cl._http = c  # pyright: ignore[reportAttributeAccessIssue]
     monkeypatch.setattr("swfactory.cli.main._client", lambda: cl)
     r = CliRunner().invoke(cli_app, ["bench", "report", RUN_ID])

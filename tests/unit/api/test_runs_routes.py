@@ -100,7 +100,7 @@ def settings_():
 
 def client(app_, email=None):
     headers = {"authorization": f"Bearer sfp_{email}"} if email else {}
-    return TestClient(app_, base_url="http://127.0.0.1:8080", headers=headers)
+    return TestClient(app_, base_url="http://127.0.0.1:7080", headers=headers)
 
 
 @pytest.fixture

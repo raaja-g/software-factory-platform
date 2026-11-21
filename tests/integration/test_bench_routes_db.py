@@ -47,9 +47,9 @@ async def api(sessions):
         users=Users(), writer=None, settings=settings,  # pyright: ignore[reportArgumentType]
     )  # fmt: skip
     app = create_app(settings, deps, on_gce=lambda: False, iap_keys=FakeKeys())  # pyright: ignore[reportArgumentType]
-    client = TestClient(app, base_url="http://127.0.0.1:8080")
+    client = TestClient(app, base_url="http://127.0.0.1:7080")
     client.headers["authorization"] = f"Bearer {TOKENS['admin']}"
-    c = ApiClient("http://127.0.0.1:8080", TOKENS["admin"])
+    c = ApiClient("http://127.0.0.1:7080", TOKENS["admin"])
     c._http = client  # pyright: ignore[reportAttributeAccessIssue]
     yield SimpleNamespace(client=client, cli=c, sessions=sessions)
     await _clean(sessions)

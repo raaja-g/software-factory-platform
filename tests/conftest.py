@@ -13,7 +13,7 @@ from swfactory.settings import get_settings
 @pytest.fixture(autouse=True)
 def _settings_env(monkeypatch):
     monkeypatch.setenv(
-        "FACTORY_DATABASE_URL", "postgresql+psycopg://factory@127.0.0.1:5432/factory"
+        "FACTORY_DATABASE_URL", "postgresql+psycopg://factory@127.0.0.1:7432/factory"
     )
     get_settings.cache_clear()
     yield

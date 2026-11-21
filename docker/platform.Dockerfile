@@ -24,5 +24,5 @@ RUN apt-get update \
 COPY --from=build /app/.venv /app/.venv
 ENV PATH=/app/.venv/bin:$PATH
 USER 10001
-EXPOSE 8080
+EXPOSE 7080
 ENTRYPOINT ["factory"]

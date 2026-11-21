@@ -181,9 +181,10 @@ function renderChrome() {
 
   const notice = $('#notice');
   notice.replaceChildren();
+  $('#nav').hidden = state.signedOut;
   if (state.signedOut) {
-    notice.append('Signed out: open the login link from ', h('code', { text: 'make up' }), ' or run ', h('code', { text: 'factory login-url' }));
-    notice.hidden = false;
+    notice.hidden = true;
+    showLogin();
   } else if (state.loadError) {
     notice.textContent = `Can't load the board (${state.loadError}). Retrying.`;
     notice.hidden = false;
@@ -1255,10 +1256,72 @@ function renderMarkdown(src, stampable) {
   return stamp + blocks(lines);
 }
 
+/* ── sign in / out ──────────────────────────────── */
+function showLogin() {
+  if ($('#login-form')) return; // already showing; do not wipe what was typed
+  const error = h('p', { class: 'login-error', role: 'alert', hidden: true });
+  const username = h('input', {
+    type: 'text', id: 'login-username', name: 'username', required: true,
+    autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false',
+  });
+  const password = h('input', {
+    type: 'password', id: 'login-password', name: 'password', required: true,
+    autocomplete: 'current-password', 'aria-describedby': 'login-error',
+  });
+  error.id = 'login-error';
+  const submit = h('button', { class: 'btn primary', type: 'submit', text: 'Sign in' });
+  const form = h('form', {
+    class: 'login', id: 'login-form',
+    on: {
+      submit: async (ev) => {
+        ev.preventDefault();
+        error.hidden = true;
+        submit.disabled = true;
+        try {
+          const res = await fetch('/api/login', {
+            method: 'POST', credentials: 'same-origin', cache: 'no-store',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ username: username.value, password: password.value }),
+          });
+          if (res.ok) { location.reload(); return; }
+          let detail = '';
+          try { detail = (await res.json()).detail || ''; } catch { /* not JSON */ }
+          error.textContent = res.status === 429 ? detail || 'Too many attempts. Try again shortly.'
+            : res.status === 401 ? 'Wrong username or password.' : `Could not sign in (HTTP ${res.status}).`;
+        } catch {
+          error.textContent = 'Could not reach the server.';
+        }
+        error.hidden = false;
+        submit.disabled = false;
+        password.select();
+      },
+    },
+  },
+  h('h2', { text: 'Sign in' }),
+  h('label', { for: 'login-username', text: 'Username' }),
+  username,
+  h('label', { for: 'login-password', text: 'Password' }),
+  password,
+  h('p', { class: 'login-hint', text: 'Your login is FACTORY_LOGIN_USER and FACTORY_LOGIN_PASSWORD in your .env file. If you have not set them, the username is "local" and the password is the API token in secrets/api_token.' }),
+  error,
+  submit);
+  $('#main').replaceChildren(h('section', { class: 'login-card' }, form));
+  username.focus();
+}
+
+async function signOut() {
+  try { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin', cache: 'no-store' }); } catch { /* ignore */ }
+  location.reload();
+}
+
 /* ── boot ───────────────────────────────────────── */
 async function boot() {
-  try { state.me = await apiJson('/api/me'); } catch { /* a 401 shows the signed-out notice */ }
+  try { state.me = await apiJson('/api/me'); } catch { /* a 401 shows the login form */ }
   renderChrome();
+  if (state.signedOut) return; // nothing to load until you sign in
+  const out = $('#signout');
+  out.hidden = false;
+  out.addEventListener('click', signOut);
   await route();
   await loadBoard();
   openSse();

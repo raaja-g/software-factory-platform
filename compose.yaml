@@ -8,6 +8,7 @@ x-platform-env: &platform-env
   FACTORY_IN_CONTAINER: "1"
   FACTORY_HOST_HOME: ${HOME}
   FACTORY_NOTIFY_WEBHOOK_URL: ${FACTORY_NOTIFY_WEBHOOK_URL:-}
+  FACTORY_PUBLIC_URL: ${FACTORY_PUBLIC_URL:-http://127.0.0.1:7000}  # the dashboard's own address (ui)
   FACTORY_DISK_HIGH_WATER_PCT: ${FACTORY_DISK_HIGH_WATER_PCT:-85}  # the worker starts no new job above this
 
 services:
@@ -55,13 +56,17 @@ services:
     build:
       context: .
       dockerfile: docker/platform.Dockerfile
-    command: ["serve", "--host", "0.0.0.0", "--port", "8080"]
+    command: ["serve", "--host", "0.0.0.0", "--port", "7080"]
     environment:
       <<: *platform-env
       FACTORY_API_TOKEN_FILE: /run/secrets/api_token
       FACTORY_BROKER_TOKEN_FILE: /run/secrets/broker_token
       FACTORY_DB_STATEMENT_TIMEOUT_S: "30"
       FACTORY_HOST_REPOS_ROOT: ${FACTORY_HOST_REPOS_ROOT:-}
+      FACTORY_SERVE_WEB: "false"  # the dashboard is the ui service; the API serves only /api
+      FACTORY_LOGIN_USER: ${FACTORY_LOGIN_USER:-}  # the dashboard username; empty = the local user name
+      FACTORY_LOGIN_PASSWORD: ${FACTORY_LOGIN_PASSWORD:-}  # the dashboard password; empty = the API token
+      FACTORY_SESSION_DAYS: ${FACTORY_SESSION_DAYS:-30}
     secrets:
       - pg_password
       - api_token
@@ -71,13 +76,13 @@ services:
       - artifacts:/var/lib/factory/artifacts
       - repos:/repos:ro
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:7080:7080"
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:8080/readyz', headers={'Host': '127.0.0.1'}), timeout=3)"
+        - "import urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:7080/readyz', headers={'Host': '127.0.0.1'}), timeout=3)"
       interval: 10s
       timeout: 5s
       retries: 6
@@ -86,6 +91,30 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    networks: [core-net]
+
+  # The dashboard on its own (static files, and /api and /login forwarded to the api service).
+  # Open http://127.0.0.1:7000. The api stays published on 7080 for the CLI and other clients.
+  ui:
+    image: swfactory-ui:dev
+    build:
+      context: .
+      dockerfile: docker/ui.Dockerfile
+    ports:
+      - "127.0.0.1:7000:7000"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7000/ui-health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
     networks: [core-net]
 
   # Runs the worker: claims jobs, drives sandboxes through the filtered Docker proxy, and holds
@@ -175,7 +204,7 @@ services:
       - gateway-config:/gateway-config:ro
       - ${GCLOUD_ADC_FILE:-${HOME}/.config/gcloud/application_default_credentials.json}:/secrets/adc.json:ro
     ports:
-      - "127.0.0.1:4000:4000"
+      - "127.0.0.1:7400:4000"
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]

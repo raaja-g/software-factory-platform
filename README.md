@@ -125,15 +125,15 @@ The factory talks to models only through its gateway, and every provider is one 
 1. Prerequisites: Docker Desktop, [uv](https://docs.astral.sh/uv/), and Google Application Default Credentials for Vertex AI: `gcloud auth application-default login`, then `gcloud auth application-default set-quota-project <your-project>`.
 2. Create your definition repo: `uv run factory init ~/factory-definition`.
 3. Copy `.env.example` to `.env` and set `FACTORY_DEFINITION_PATH` (the full path of that folder), `GOOGLE_CLOUD_PROJECT`, the `LITELLM_*` values, and `FACTORY_HOST_REPOS_ROOT`, the folder your repos live under, such as `/Users/you/work`. Docker Desktop must share that folder (Settings, Resources, File sharing).
-4. `make up` builds the image, creates `secrets/pg_password` and `secrets/api_token` if missing, starts the stack and prints a one-time login URL.
-5. Open that URL (or run `factory login-url` for a fresh one) at `http://127.0.0.1:8080`.
+4. `make up` builds the image, creates `secrets/pg_password` and `secrets/api_token` if missing, and starts the stack.
+5. Open **`http://127.0.0.1:7000`** and sign in. The password is `FACTORY_LOGIN_PASSWORD` from your `.env` (at least 8 characters; pick your own). If you have not set one, the password is the contents of `secrets/api_token`. You stay signed in for 30 days (`FACTORY_SESSION_DAYS`); five wrong passwords lock the form for a minute. Prefer the terminal? `make dashboard` (or `factory dashboard`) opens the dashboard already signed in.
 6. Link the skill: `ln -s "$PWD/claude-skill/factory" ~/.claude/skills/factory`.
 7. Run it on a repo: `factory run --repo ~/work/my-app --req ./requirement.md`.
-8. `make down` stops the stack and keeps your data (`make login` prints a new login URL).
+8. `make down` stops the stack and keeps your data.
 
 **Trusted repos only on a Mac.** Docker Desktop has no gVisor, so sandboxes share the Linux VM kernel. Run the factory only on repos you trust. The API needs the token even locally: every `/api` call without it returns 401.
 
-Services: `postgres`, `migrate`, `gateway-db`, `gateway`, `gateway-edge`, `gateway-migrate`, `docker-proxy`, `api` and `orchestrator`. Only `127.0.0.1:8080` (dashboard and API) and `127.0.0.1:4000` (gateway) are published. `make test-db` starts Postgres on `127.0.0.1:5432` for the `db` tests; `make image` builds the multi-arch image.
+Services: `postgres`, `migrate`, `gateway-db`, `gateway`, `gateway-edge`, `gateway-migrate`, `docker-proxy`, `api`, `ui` and `orchestrator`. Only three ports are published, all on `127.0.0.1` and all in the 7xxx range so they do not collide with other apps: `7000` is the **dashboard** (its own `ui` container: a locked-down nginx that serves the static files and forwards only `/api` and `/login` to the API), `7080` is the **API** (for the CLI and other clients; it serves no dashboard in this stack) and `7400` is the model gateway. `make test-db` starts Postgres on `127.0.0.1:7432` for the `db` tests; `make image` builds the multi-arch image.
 
 ## Set up and run (development)
 
@@ -143,7 +143,7 @@ You need Docker, [uv](https://docs.astral.sh/uv/) and Python 3.12 or 3.13 (uv fe
 uv sync
 mkdir -p secrets && openssl rand -hex 16 > secrets/pg_password
 cp .env.example .env
-make test-db   # Postgres on 127.0.0.1:5432 plus migrations
+make test-db   # Postgres on 127.0.0.1:7432 plus migrations
 
 uv run factory init ~/factory-definition
 uv run factory def validate ~/factory-definition
@@ -162,7 +162,7 @@ Run the tests:
 
 ```bash
 uv run pytest                                   # no Docker or network needed
-export FACTORY_TEST_DATABASE_URL="postgresql+psycopg://factory:$(cat secrets/pg_password)@127.0.0.1:5432/postgres"
+export FACTORY_TEST_DATABASE_URL="postgresql+psycopg://factory:$(cat secrets/pg_password)@127.0.0.1:7432/postgres"
 uv run pytest -m db                             # needs the Postgres container
 uv run pytest -m docker                         # builds and uses real containers; needs the runner images
 ```

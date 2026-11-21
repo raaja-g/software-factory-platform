@@ -171,7 +171,7 @@ def client_as(app_server):
     def make(email, role, srv=None):
         users = Users()
         users.who = (email, role)
-        c = TestClient(srv or _app_server(users), base_url="http://127.0.0.1:8080")
+        c = TestClient(srv or _app_server(users), base_url="http://127.0.0.1:7080")
         c.headers["authorization"] = "Bearer sfp_t"
         return c
 
@@ -236,7 +236,7 @@ def _viewer_client(srv, email="bob@x.io", role="viewer"):
     users = Users()
     users.who = (email, role)
     object.__setattr__(srv.state.deps, "users", users)
-    c = TestClient(srv, base_url="http://127.0.0.1:8080")
+    c = TestClient(srv, base_url="http://127.0.0.1:7080")
     c.headers["authorization"] = "Bearer sfp_t"
     return c
 

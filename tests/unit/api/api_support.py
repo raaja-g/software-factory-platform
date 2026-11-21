@@ -23,7 +23,7 @@ TOKEN = "sfp_good"
 def settings(**kw):
     base = {
         "FACTORY_MODE": "personal",
-        "FACTORY_DATABASE_URL": "postgresql+psycopg://factory@127.0.0.1:5432/x",
+        "FACTORY_DATABASE_URL": "postgresql+psycopg://factory@127.0.0.1:7432/x",
         "FACTORY_API_TOKEN": PERSONAL_TOKEN,
     }
     base.update(kw)

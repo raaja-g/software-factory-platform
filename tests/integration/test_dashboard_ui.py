@@ -810,10 +810,99 @@ def test_dark_theme(page_dark, page_light):
     assert (bg(page_light), bg(page_dark)) == (LIGHT_BG, DARK_BG)
 
 
-def test_signed_out_message(page):
-    page.route("**/api/board", lambda r: r.fulfill(status=401, body="{}"))
+def _sign_out(page, me_status=None):
+    """Make the page look signed out: the API answers 401 until `state['in']` is set."""
+    state = {"in": False}
+
+    def unauthorised(route: Route) -> None:
+        if state["in"]:
+            route.fallback()
+        else:
+            route.fulfill(status=401, content_type="application/json", body='{"detail":"x"}')
+
+    page.route("**/api/me", unauthorised)
+    page.route("**/api/board", unauthorised)
     page.reload()
-    expect(page.locator("#notice")).to_contain_text("Signed out")
+    return state
+
+
+def test_signed_out_shows_a_login_form_not_instructions(page):
+    _sign_out(page)
+    form = page.locator("#login-form")
+    expect(form).to_be_visible()
+    expect(page.get_by_label("Username")).to_be_focused()
+    expect(page.get_by_label("Password")).to_be_visible()
+    expect(page.get_by_role("button", name="Sign in")).to_be_visible()
+    body = page.locator("body").inner_text()
+    assert "login-url" not in body and "make up" not in body  # no command-line detour
+    expect(page.locator("#nav")).to_be_hidden()  # no pages to browse before signing in
+    expect(page.locator("#notice")).to_be_hidden()
+
+
+def test_a_wrong_password_says_so_and_keeps_the_form(page):
+    _sign_out(page)
+    page.route("**/api/login", lambda r: _json(r, {"detail": "wrong password"}, 401))
+    page.get_by_label("Username").fill("Raja")
+    page.get_by_label("Password").fill("nope")
+    page.get_by_role("button", name="Sign in").click()
+    expect(page.get_by_role("alert")).to_have_text("Wrong username or password.")
+    expect(page.locator("#login-form")).to_be_visible()
+    expect(page.get_by_role("button", name="Sign in")).to_be_enabled()
+
+
+def test_too_many_attempts_shows_the_wait(page):
+    _sign_out(page)
+    msg = "too many attempts, try again in 42 seconds"
+    page.route("**/api/login", lambda r: _json(r, {"detail": msg}, 429))
+    page.get_by_label("Username").fill("Raja")
+    page.get_by_label("Password").fill("whatever1")
+    page.get_by_role("button", name="Sign in").click()
+    expect(page.get_by_role("alert")).to_contain_text("try again in 42 seconds")
+
+
+def test_the_right_password_signs_in_and_shows_the_board(page):
+    state = _sign_out(page)
+    sent = []
+
+    def login(route: Route) -> None:
+        sent.append(route.request.post_data_json)
+        state["in"] = True  # the cookie is set; the reload that follows is signed in
+        _json(route, {"ok": True})
+
+    page.route("**/api/login", login)
+    page.get_by_label("Username").fill("Raja")
+    page.get_by_label("Password").fill("correct horse battery")
+    page.get_by_role("button", name="Sign in").click()
+    expect(page.locator(".station-head h2").first).to_be_visible()
+    assert sent == [{"username": "Raja", "password": "correct horse battery"}]
+    expect(page.locator("#login-form")).to_have_count(0)
+
+
+def test_sign_out_clears_the_session_and_returns_to_the_form(page):
+    expect(page.get_by_role("button", name="Sign out")).to_be_visible()
+    state = {"out": False}
+
+    def unauthorised_once_out(route: Route) -> None:
+        if state["out"]:
+            route.fulfill(status=401, content_type="application/json", body='{"detail":"x"}')
+        else:
+            route.fallback()
+
+    page.route("**/api/me", unauthorised_once_out)
+    page.route("**/api/board", unauthorised_once_out)
+
+    def logout(route: Route) -> None:
+        state["out"] = True
+        _json(route, {"ok": True})
+
+    page.route("**/api/logout", logout)
+    page.get_by_role("button", name="Sign out").click()
+    expect(page.locator("#login-form")).to_be_visible()
+
+
+def test_the_sign_out_button_is_hidden_on_the_login_form(page):
+    _sign_out(page)
+    expect(page.get_by_role("button", name="Sign out")).to_be_hidden()
 
 
 def test_add_budget_on_budget_stop_for_admins(page, page_approver):

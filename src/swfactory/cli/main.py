@@ -462,8 +462,14 @@ def _norm_ref(ref: str) -> str:
     return f"{key[0]}:{key[1]}" if isinstance(key, tuple) else ref
 
 
+def _dashboard_base() -> str:
+    """Where the dashboard is: its own address when a separate UI serves it, else the API's."""
+    s = get_settings()
+    return (s.public_url or s.api_url).rstrip("/")
+
+
 def _job_link(job_id: str) -> str:
-    return f"{get_settings().api_url.rstrip('/')}/#/job/{job_id}"
+    return f"{_dashboard_base()}/#/job/{job_id}"
 
 
 @jobs_app.command("create")
@@ -1240,7 +1246,7 @@ def _resolve_mode_or_exit(settings: Any) -> None:
 @app.command("serve")
 def serve(
     host: Annotated[str, typer.Option(help="Bind address")] = "127.0.0.1",
-    port: Annotated[int, typer.Option(help="Port")] = 8080,
+    port: Annotated[int, typer.Option(help="Port")] = 7080,
 ):
     """Run the API and dashboard."""
     from swfactory.api.auth import check_bind_host
@@ -1261,7 +1267,25 @@ def serve(
 def login_url():
     """Print a one-time dashboard login URL (personal mode)."""
     code = _api_call(lambda c: c.login_code())
-    typer.echo(f"{get_settings().api_url.rstrip('/')}/login?code={code}")
+    typer.echo(f"{_dashboard_base()}/login?code={code}")
+
+
+@app.command("dashboard")
+def dashboard(
+    no_open: Annotated[
+        bool, typer.Option("--no-open", help="Only print the link, do not open the browser")
+    ] = False,
+):
+    """Open the dashboard in your browser, logged in (personal mode). One command, no copying.
+
+    It mints a one-time login link and opens it; the session then lasts FACTORY_SESSION_DAYS."""
+    import webbrowser
+
+    code = _api_call(lambda c: c.login_code())
+    url = f"{_dashboard_base()}/login?code={code}"
+    typer.echo(url)
+    if not no_open and not webbrowser.open(url):
+        typer.echo("could not open a browser; open the link above", err=True)
 
 
 @app.command("worker")

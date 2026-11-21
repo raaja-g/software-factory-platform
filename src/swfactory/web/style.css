@@ -246,3 +246,16 @@ svg.bench-chart .pt.pareto{fill:var(--pass);stroke:var(--pass)}
 .linklike{background:none;border:0;padding:0;font:inherit;color:inherit;text-decoration:underline;cursor:pointer}
 .improvement-panel h4{margin:12px 0 4px;font:600 12px var(--mono);color:var(--muted)}
 .improvement-panel .hint{font-weight:600}
+
+/* login */
+.login-card{display:flex;justify-content:center;padding:12vh 16px 0}
+form.login{width:min(360px,100%);display:grid;gap:10px;padding:22px;border:1px solid var(--rule);border-radius:10px;background:var(--panel)}
+form.login h2{margin:0 0 4px;font-size:18px}
+form.login label{font:600 12px/1 var(--body);color:var(--muted)}
+form.login input{font:15px/1.2 var(--body);padding:9px 10px;border:1px solid var(--rule);border-radius:6px;background:var(--bg,var(--panel));color:var(--ink)}
+form.login .btn{padding:10px 12px;font-size:14px}
+.login-hint{margin:0;font-size:12px;color:var(--muted)}
+.login-error{margin:0;font-size:13px;color:var(--andon)}
+
+/* the hidden attribute must win over any display rule (the nav is hidden before sign-in) */
+[hidden]{display:none!important}

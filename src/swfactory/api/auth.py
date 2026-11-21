@@ -299,3 +299,29 @@ def require(role: str) -> Callable[..., Awaitable[Principal]]:
         return principal
 
     return dependency
+
+
+class LoginThrottle:
+    """Locks the password form after repeated wrong passwords (in memory: one local user)."""
+
+    def __init__(self, *, max_failures: int = 5, window_s: float = 60.0) -> None:
+        self.max_failures = max_failures
+        self.window_s = window_s
+        self._failures: list[float] = []
+
+    def _prune(self, now: float) -> None:
+        self._failures = [t for t in self._failures if now - t < self.window_s]
+
+    def retry_after(self, now: float | None = None) -> int:
+        """Seconds until the form unlocks; 0 when it is open."""
+        now = time.monotonic() if now is None else now
+        self._prune(now)
+        if len(self._failures) < self.max_failures:
+            return 0
+        return max(1, int(self.window_s - (now - self._failures[0])) + 1)
+
+    def failed(self, now: float | None = None) -> None:
+        self._failures.append(time.monotonic() if now is None else now)
+
+    def succeeded(self) -> None:
+        self._failures.clear()

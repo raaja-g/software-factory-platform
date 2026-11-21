@@ -45,9 +45,9 @@ def test_image_multi_arch():
 def test_make_up_ready_and_down():
     out = sh("make up").stdout
     try:
-        assert "http://127.0.0.1:8080/login?code=" in out
-        assert http("http://127.0.0.1:8080/readyz") == 200
-        assert http("http://127.0.0.1:8080/api/jobs", b"{}") == 401
+        assert "http://127.0.0.1:7080/login?code=" in out
+        assert http("http://127.0.0.1:7080/readyz") == 200
+        assert http("http://127.0.0.1:7080/api/jobs", b"{}") == 401
     finally:
         sh("make down")
 
@@ -60,7 +60,7 @@ def test_fresh_stack_serves_the_active_definition():
     try:
         key = os.environ.get("LITELLM_MASTER_KEY", "")
         req = urllib.request.Request(
-            "http://127.0.0.1:4000/v1/models", headers={"Authorization": f"Bearer {key}"}
+            "http://127.0.0.1:7400/v1/models", headers={"Authorization": f"Bearer {key}"}
         )
         served = {m["id"] for m in json.load(urllib.request.urlopen(req, timeout=10))["data"]}
         from swfactory.definition.loader import load_definition
