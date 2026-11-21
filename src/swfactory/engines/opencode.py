@@ -68,6 +68,17 @@ def _runs_dir(task: AgentTask) -> str:
     return f"{HOME}/opencode/runs/{task.run_id}"
 
 
+# The most output OpenCode may ask a model for in one reply. A model that declares no limit gets
+# OpenCode's default (about 32k tokens), which Groq's qwen refuses ("max_tokens must be less than
+# or equal to 16384"), and a refused reply fails the step in seconds. Context 0 keeps OpenCode's
+# behaviour for unknown models (no context check); only the output ask is bounded.
+OUTPUT_TOKEN_LIMIT = 16000
+
+
+def model_entry(alias: str) -> dict[str, Any]:
+    return {"name": alias, "limit": {"context": 0, "output": OUTPUT_TOKEN_LIMIT}}
+
+
 def opencode_config(task: AgentTask) -> dict[str, Any]:
     anthropic = model_family(task.model.upstream_id) == "claude"
     key = "factory-anthropic" if anthropic else "factory"
@@ -79,7 +90,7 @@ def opencode_config(task: AgentTask) -> dict[str, Any]:
             "baseURL": f"{task.gateway_base_url}/v1",
             "apiKey": "{env:FACTORY_GATEWAY_KEY}",
         },
-        "models": {alias: {"name": alias}},
+        "models": {alias: model_entry(alias)},
     }
     return {
         "$schema": "https://opencode.ai/config.json",

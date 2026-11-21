@@ -10,6 +10,7 @@ from swfactory.engines.base import fallback_detected
 from swfactory.engines.opencode import (
     OPENCODE_CACHE,
     OPENCODE_HOME_CACHE,
+    OUTPUT_TOKEN_LIMIT,
     OpenCodeEngine,
     opencode_config,
     opencode_permission,
@@ -74,6 +75,15 @@ async def test_invocation(stub_box_opencode, task):
     assert task.gateway_key not in json.dumps(cfg)
     assert r.status is RunStatus.OK and r.session_id and r.usage.output_tokens > 0
     assert r.output == "Done."
+
+
+def test_every_model_declares_an_output_limit(claude_task, task):
+    """Without one OpenCode asks for its default (about 32k tokens), which Groq's qwen refuses."""
+    for t in (task, claude_task):
+        (provider,) = opencode_config(t)["provider"].values()
+        entry = provider["models"][t.model.alias]
+        assert entry["limit"] == {"context": 0, "output": OUTPUT_TOKEN_LIMIT}
+    assert OUTPUT_TOKEN_LIMIT <= 16384  # the smallest cap of the free providers in use
 
 
 def test_claude_uses_anthropic_provider(claude_task):

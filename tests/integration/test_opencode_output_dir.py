@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from swfactory.domain.types import ToolPolicy
-from swfactory.engines.opencode import opencode_permission
+from swfactory.engines.opencode import OUTPUT_TOKEN_LIMIT, model_entry, opencode_permission
 
 IMAGE = "swfactory/runner:0.1.0"
 OLD_WRITE_PERMISSION = {"edit": "allow", "bash": "allow", "webfetch": "deny"}
@@ -39,12 +39,15 @@ def _chunk(delta: dict, finish: str | None = None, usage: dict | None = None) ->
 class Scripted(BaseHTTPRequestHandler):
     """First request: call the `write` tool. After the tool result: say done."""
 
+    seen: list[dict] = []  # every request body OpenCode sent
+
     def log_message(self, *a):
         pass
 
     def do_POST(self):  # noqa: N802
         n = int(self.headers.get("content-length") or 0)
         req = json.loads(self.rfile.read(n) or b"{}")
+        Scripted.seen.append(req)
         have_result = any(m.get("role") == "tool" for m in req.get("messages", []))
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
@@ -73,7 +76,7 @@ cat > /home/factory/opencode/runs/t/opencode.json <<JSON
 {"autoupdate":false,"share":"disabled",
  "provider":{"factory":{"npm":"@ai-sdk/openai-compatible","name":"t",
   "options":{"baseURL":"http://host.docker.internal:$PORT/v1","apiKey":"none"},
-  "models":{"scripted":{"name":"scripted"}}}},
+  "models":$MODELS}},
  "agent":{"factory":{"prompt":"{file:/home/factory/opencode/runs/t/system.md}","mode":"primary"}}}
 JSON
 export OPENCODE_CONFIG=/home/factory/opencode/runs/t/opencode.json OPENCODE_DISABLE_CLAUDE_CODE=1 \
@@ -88,13 +91,15 @@ grep -o 'permission requested[^"]*' /tmp/err.txt /tmp/events.json | head -2
 """
 
 
-def _run_opencode(permission: dict) -> str:
+def _run_opencode(permission: dict, models: dict | None = None) -> str:
+    Scripted.seen.clear()
+    models = models or {"scripted": {"name": "scripted"}}
     server = ThreadingHTTPServer(("0.0.0.0", 0), Scripted)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         out = subprocess.run(
             ["docker", "run", "--rm", "--add-host", "host.docker.internal:host-gateway",
-             "-e", f"PORT={server.server_port}",
+             "-e", f"PORT={server.server_port}", "-e", f"MODELS={json.dumps(models)}",
              "-e", f"OPENCODE_PERMISSION={json.dumps(permission)}",
              "--entrypoint", "sh", IMAGE, "-c", SCRIPT],
             capture_output=True, text=True, timeout=200,
@@ -120,3 +125,23 @@ def test_write_role_can_write_its_output_file_outside_the_repo():
 def test_without_the_permission_opencode_rejects_that_write():
     out = _run_opencode(OLD_WRITE_PERMISSION)
     assert "NOT WRITTEN" in out and "external_directory" in out, out
+
+
+def _max_output_asked() -> int:
+    asked: list[int] = []
+    for r in Scripted.seen:
+        v = r.get("max_tokens") or r.get("max_completion_tokens")
+        assert v, r
+        asked.append(int(v))
+    assert asked
+    return max(asked)
+
+
+@pytest.mark.skipif(not _image_present(), reason="opt-in: build swfactory/runner:0.1.0 first")
+def test_opencode_asks_for_no_more_output_than_the_declared_limit():
+    """Groq's qwen answers 400 when max_tokens is above 16384, and OpenCode asks for about 32000
+    for a model that declares no limit. The real request, with and without the declared limit."""
+    _run_opencode(opencode_permission(ToolPolicy.WRITE))
+    assert _max_output_asked() > 16384  # what an undeclared model gets: the bug
+    _run_opencode(opencode_permission(ToolPolicy.WRITE), {"scripted": model_entry("scripted")})
+    assert _max_output_asked() <= OUTPUT_TOKEN_LIMIT
