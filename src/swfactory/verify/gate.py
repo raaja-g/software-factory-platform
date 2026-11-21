@@ -76,6 +76,49 @@ def _git(box: Sandbox, *args: str) -> Any:
     return box.exec(safe_git(*args), cwd=REPO, env=SAFE_GIT_ENV)
 
 
+# Build output and caches that never belong in a commit, left out of the safety-net commit even
+# when the repo has no .gitignore (the demo repo had none and merged its __pycache__/*.pyc).
+_JUNK = (
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/node_modules/**",
+    "**/.venv/**",
+    "**/.pytest_cache/**",
+    "**/.mypy_cache/**",
+    "**/.ruff_cache/**",
+    "**/.DS_Store",
+)
+JUNK_PATHSPECS = tuple(f":(exclude,glob){g}" for g in _JUNK)
+
+
+async def commit_leftovers(box: Sandbox, trailers: Mapping[str, str]) -> bool:
+    """Commit what the builder left uncommitted, as "factory: builder changes".
+
+    The repo's own .gitignore applies, and so does the junk list above. True when a commit was made;
+    a clean tree, or one with only junk, makes none."""
+    dirty = await _git(box, "status", "--porcelain")
+    if not dirty.stdout.strip():
+        return False
+    await _git(box, "add", "-A", "--", ".", *JUNK_PATHSPECS)
+    # `git status`, not `git diff`: nothing that can run a configured program is used in this box
+    after = await _git(box, "status", "--porcelain")
+    if not any(line[:1] in "AMDRCT" for line in after.stdout.splitlines()):
+        return False  # nothing but junk was left
+    await _git(
+        box,
+        "-c",
+        "user.name=Software Factory",
+        "-c",
+        "user.email=factory@localhost",
+        "commit",
+        "-q",
+        "-m",
+        "factory: builder changes",
+        *[f"--trailer={k}: {v}" for k, v in trailers.items()],
+    )
+    return True
+
+
 class VerifyGate:
     def __init__(
         self,
@@ -136,21 +179,7 @@ class VerifyGate:
         sym = await _git(box, "symbolic-ref", "HEAD")
         if sym.exit_code != 0 or sym.stdout.strip() != ref:
             return await self._early(job, round, attempt, REASON_HEAD_NOT_ON_BRANCH)
-        dirty = await _git(box, "status", "--porcelain")
-        if dirty.stdout.strip():
-            await _git(box, "add", "-A")
-            await _git(
-                box,
-                "-c",
-                "user.name=Software Factory",
-                "-c",
-                "user.email=factory@localhost",
-                "commit",
-                "-q",
-                "-m",
-                "factory: builder changes",
-                *[f"--trailer={k}: {v}" for k, v in (trailers or _DEFAULT_TRAILERS).items()],
-            )
+        await commit_leftovers(box, trailers or _DEFAULT_TRAILERS)
         if not await self.git.rebase(job, app, box):
             return await self._early(job, round, attempt, REASON_REBASE_CONFLICT)
         head = (await _git(box, "rev-parse", ref)).stdout.strip()
