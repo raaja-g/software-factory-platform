@@ -318,7 +318,16 @@ class GatewayClient:
             msgs_ok = await self._probe_messages(alias)
         return ProbeResult(True, tool_ok, msgs_ok, latency, None, None)
 
-    async def _probe_tool_call(self, alias: str) -> bool:
+    async def _probe_tool_call(self, alias: str) -> bool | None:
+        """Does the model answer a tool request with a valid tool call?
+
+        True when it does, False when the model clearly does not, None when the probe could not
+        tell (a timeout, a 5xx or a rate limit: the model may have been busy or still loading,
+        and a failed probe must not be recorded as "no tool support" for good).
+
+        Servers differ on `tool_choice`: OpenAI-style gateways take the forced function form, LM
+        Studio answers 400 to it but accepts "required", and some take only "auto". Each form is
+        tried in turn. The token limit leaves room for a reasoning model to think first."""
         tool = {
             "type": "function",
             "function": {
@@ -331,24 +340,40 @@ class GatewayClient:
                 },
             },
         }
-        resp = await self._probe_post(
-            "/v1/chat/completions",
-            {
-                "model": alias,
-                "messages": [{"role": "user", "content": "Call record with value 'ok'."}],
-                "tools": [tool],
-                "tool_choice": {"type": "function", "function": {"name": "record"}},
-                "max_tokens": 64,
-            },
-        )
-        if resp.status_code >= 400:
-            return False
-        try:
-            call = resp.json()["choices"][0]["message"]["tool_calls"][0]["function"]
-            json.loads(call["arguments"])
-            return call["name"] == "record"
-        except (KeyError, IndexError, TypeError, ValueError):
-            return False
+        choices: list[Any] = [
+            {"type": "function", "function": {"name": "record"}},
+            "required",
+            "auto",
+        ]
+        unknown = False
+        for choice in choices:
+            try:
+                resp = await self._probe_post(
+                    "/v1/chat/completions",
+                    {
+                        "model": alias,
+                        "messages": [{"role": "user", "content": "Call record with value 'ok'."}],
+                        "tools": [tool],
+                        "tool_choice": choice,
+                        "max_tokens": 512,
+                    },
+                )
+            except httpx.HTTPError:
+                unknown = True
+                continue
+            if resp.status_code >= 500 or resp.status_code in (408, 429):
+                unknown = True
+                continue
+            if resp.status_code >= 400:
+                continue  # this form of tool_choice (or tools at all) is refused; try the next
+            try:
+                call = resp.json()["choices"][0]["message"]["tool_calls"][0]["function"]
+                json.loads(call["arguments"])
+                if call["name"] == "record":
+                    return True
+            except (KeyError, IndexError, TypeError, ValueError):
+                pass
+        return None if unknown else False
 
     async def _probe_messages(self, alias: str) -> bool:
         headers = {"anthropic-version": "2023-06-01"}

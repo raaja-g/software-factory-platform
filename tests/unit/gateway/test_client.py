@@ -281,6 +281,60 @@ async def test_probe_bad_tool_arguments(gw: GatewayClient, srv: Server):
     assert r.reachable and r.tool_call_ok is False
 
 
+async def test_probe_tool_choice_falls_back_for_servers_that_reject_the_forced_form(
+    gw: GatewayClient, srv: Server
+):
+    # LM Studio answers 400 "Invalid tool_choice type" to {"type":"function","function":{...}}
+    # but supports tools; a capable model must not be marked as having none
+    srv.handlers["/v1/chat/completions"] = [
+        chat_ok(),
+        httpx.Response(400, json={"error": {"message": "Invalid tool_choice type"}}),
+        chat_tool(),
+    ]
+    r = await gw.probe("gpt-oss@lmstudio", tool_call=True)
+    assert r.reachable and r.tool_call_ok is True
+    choices = [b.get("tool_choice") for b in srv.sent_json("/v1/chat/completions")[1:]]
+    assert choices[0]["function"]["name"] == "record" and choices[1] == "required"
+
+
+async def test_probe_model_without_tool_support_is_false(gw: GatewayClient, srv: Server):
+    no_tools = httpx.Response(400, json={"error": {"message": "model does not support tools"}})
+    srv.handlers["/v1/chat/completions"] = [chat_ok(), no_tools, no_tools, no_tools]
+    r = await gw.probe("plain@local", tool_call=True)
+    assert r.reachable and r.tool_call_ok is False
+
+
+async def test_probe_answer_without_a_tool_call_is_false(gw: GatewayClient, srv: Server):
+    srv.handlers["/v1/chat/completions"] = [chat_ok(), chat_ok(), chat_ok(), chat_ok()]
+    r = await gw.probe("chatty@local", tool_call=True)
+    assert r.reachable and r.tool_call_ok is False
+
+
+async def test_probe_server_error_is_unknown_not_no_tools(
+    gw: GatewayClient, srv: Server, monkeypatch
+):
+    # a model that was busy or loading must not be recorded as lacking tool support for good
+    monkeypatch.setattr(client_module, "_sleep", record([]))
+    srv.handlers["/v1/chat/completions"] = [chat_ok(), httpx.Response(503, text="loading")]
+    r = await gw.probe("busy@local", tool_call=True)
+    assert r.reachable and r.tool_call_ok is None
+
+
+async def test_probe_transport_error_on_the_tool_call_is_unknown(
+    gw: GatewayClient, srv: Server, monkeypatch
+):
+    monkeypatch.setattr(client_module, "_sleep", record([]))
+    srv.handlers["/v1/chat/completions"] = [chat_ok(), httpx.ReadTimeout("slow")]
+    r = await gw.probe("slow@local", tool_call=True)
+    assert r.reachable and r.tool_call_ok is None
+
+
+async def test_probe_gives_reasoning_models_room_for_the_tool_call(gw: GatewayClient, srv: Server):
+    srv.handlers["/v1/chat/completions"] = [chat_ok(), chat_tool()]
+    await gw.probe("thinker@local", tool_call=True)
+    assert srv.sent_json("/v1/chat/completions")[1]["max_tokens"] >= 256
+
+
 async def test_probe_messages_round_trip(gw: GatewayClient, srv: Server):
     srv.handlers["/v1/chat/completions"] = [chat_ok(), chat_tool()]
     srv.handlers["/v1/messages"] = [
