@@ -127,16 +127,38 @@ class Judgement:
     reason: str
 
 
-_LABEL_RE = re.compile(r"^[\s#>*_]*label[\s*_]*:[\s*_]*(.*?)[\s*_]*$", re.I)
+_LABEL_RE = re.compile(r"^[\s#*_]*label[\s*_]*:[\s*_]*(.*?)[\s*_]*$", re.I)  # no `>`: a quote
 _REASON_RE = re.compile(r"^[\s#>*_]*reason[\s*_]*:[\s*_]*(.*?)[\s*_]*$", re.I)
 _VALUE_STRIP = " \t`'\"*_"
+
+
+def _unquoted_lines(text: str) -> list[str]:
+    """The non-empty lines of the judge's own answer: not inside a code fence, not a quote.
+
+    The judge reads untrusted text (a diff can contain a line "LABEL: A") and may quote it back.
+    A quoted or fenced line is the input talking, never the verdict. An unclosed fence hides the
+    rest, which errs towards "no verdict"."""
+    out: list[str] = []
+    fence: str | None = None
+    for ln in text.splitlines():
+        t = ln.strip()
+        if fence is None and t.startswith(("```", "~~~")):
+            fence = t[:3]
+            continue
+        if fence is not None:
+            if t.startswith(fence):
+                fence = None
+            continue
+        if t and not t.startswith(">"):
+            out.append(ln)
+    return out
 
 
 def parse_judgement(text: str, scorer: ScorerDef) -> Judgement:
     # One `LABEL: <value>` line anywhere: models sometimes open with a sentence, and the answer is
     # still clear. Two or more is ambiguous (a judge quoting a line from the diff, then its own),
     # so that is refused rather than guessed at.
-    lines = [ln for ln in text.splitlines() if ln.strip()]
+    lines = _unquoted_lines(text)
     hits: list[tuple[int, str]] = []
     for i, ln in enumerate(lines):
         m = _LABEL_RE.match(ln)
